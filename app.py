@@ -29,19 +29,20 @@ db = SQLAlchemy(app)
 
 # --- AUTOMAP ---
 Base = automap_base()
-try:
-    with app.app_context():
-        Base.prepare(db.engine, reflect=True)
-        # Tabellen laden
-        Global_Catalogus = Base.classes.Global_Catalogus
-        Lokaal_Artikel = Base.classes.Lokaal_Artikel
-        Voorraad_Positie = Base.classes.Voorraad_Positie
-        Bedrijf = Base.classes.Bedrijf
-        Vestiging = Base.classes.Vestiging
-        Ruimte = Base.classes.Ruimte
-        Kast = Base.classes.Kast
-except Exception as e:
-    print(f"DB Error: {e}")
+
+# We doen dit NIET in een try-except blok. 
+# Als de DB niet bereikbaar is, MOET de app crashen zodat we de foutmelding zien in Azure Logs.
+with app.app_context():
+    Base.prepare(db.engine, reflect=True)
+    
+    # Tabellen laden
+    Global_Catalogus = Base.classes.Global_Catalogus
+    Lokaal_Artikel = Base.classes.Lokaal_Artikel
+    Voorraad_Positie = Base.classes.Voorraad_Positie
+    Bedrijf = Base.classes.Bedrijf
+    Vestiging = Base.classes.Vestiging
+    Ruimte = Base.classes.Ruimte
+    Kast = Base.classes.Kast
 
 # --- HELPER FUNCTIES ---
 
