@@ -97,11 +97,114 @@ def upload_to_blob(file):
         print(f"Azure Upload Error: {e}")
         return None
 
-# --- ROUTES: ARTIKELEN & CATALOGUS ---
+# --- ROUTES: DASHBOARD & BEHEER ---
 
 @app.route('/')
 def dashboard():
     return render_template('base.html')
+
+@app.route('/beheer')
+def beheer_dashboard():
+    """Centraal portaal voor beheertaken."""
+    return render_template('beheer.html')
+
+# --- ROUTES: INFRASTRUCTUUR (Vestiging -> Ruimte -> Kast) ---
+
+@app.route('/beheer/infra')
+def beheer_infra():
+    if not Vestiging or not Ruimte or not Kast:
+        flash("Database tabellen niet geladen.", "danger")
+        return redirect(url_for('beheer_dashboard'))
+    
+    # Haal alles op. 
+    # Let op: Bij automap zijn relaties soms lastig direct te benaderen in Jinja 
+    # zonder expliciete configuratie. We halen lijsten los op of gebruiken 
+    # een simpele join logica in de template (of pre-processen in Python).
+    # Hier kiezen we voor het ophalen van de Vestigingen en laten de relaties aan SQLAlchemy over
+    # mits automap ze herkend heeft (meestal vestiging.ruimte_collection).
+    # Voor zekerheid sturen we losse lijsten mee als fallback of voor selects.
+    
+    vestigingen = db.session.query(Vestiging).all()
+    ruimtes = db.session.query(Ruimte).all()
+    kasten = db.session.query(Kast).all()
+    
+    return render_template('beheer_infra.html', 
+                           vestigingen=vestigingen, 
+                           ruimtes=ruimtes, 
+                           kasten=kasten)
+
+@app.route('/beheer/vestiging/nieuw', methods=['POST'])
+def nieuwe_vestiging():
+    naam = request.form.get('naam')
+    adres = request.form.get('adres')
+    bedrijf_id = 1 # Hardcoded voor nu
+    
+    if naam:
+        nieuw = Vestiging(bedrijf_id=bedrijf_id, naam=naam, adres=adres)
+        db.session.add(nieuw)
+        db.session.commit()
+        flash(f"Vestiging '{naam}' aangemaakt.", "success")
+    return redirect(url_for('beheer_infra'))
+
+@app.route('/beheer/ruimte/nieuw', methods=['POST'])
+def nieuwe_ruimte():
+    naam = request.form.get('naam')
+    vestiging_id = request.form.get('vestiging_id')
+    
+    if naam and vestiging_id:
+        nieuw = Ruimte(vestiging_id=vestiging_id, naam=naam)
+        db.session.add(nieuw)
+        db.session.commit()
+        flash(f"Ruimte '{naam}' aangemaakt.", "success")
+    return redirect(url_for('beheer_infra'))
+
+@app.route('/beheer/kast/nieuw', methods=['POST'])
+def nieuwe_kast():
+    naam = request.form.get('naam')
+    ruimte_id = request.form.get('ruimte_id')
+    type_opslag = request.form.get('type_opslag', 'Stellingkast')
+    
+    if naam and ruimte_id:
+        nieuw = Kast(ruimte_id=ruimte_id, naam=naam, type_opslag=type_opslag)
+        db.session.add(nieuw)
+        db.session.commit()
+        flash(f"Kast '{naam}' aangemaakt.", "success")
+    return redirect(url_for('beheer_infra'))
+
+
+# --- ROUTES: GLOBAL CATALOGUS BEHEER ---
+
+@app.route('/beheer/catalogus')
+def beheer_catalogus():
+    if not Global_Catalogus:
+        flash("Tabel Global_Catalogus niet geladen.", "danger")
+        return redirect(url_for('beheer_dashboard'))
+        
+    items = db.session.query(Global_Catalogus).all()
+    return render_template('beheer_catalogus.html', items=items)
+
+@app.route('/beheer/catalogus/nieuw', methods=['POST'])
+def nieuw_global_item():
+    naam = request.form.get('generieke_naam')
+    ean = request.form.get('ean_code')
+    foto_file = request.files.get('afbeelding')
+    
+    if naam:
+        foto_url = upload_to_blob(foto_file)
+        
+        nieuw = Global_Catalogus(
+            generieke_naam=naam,
+            ean_code=ean,
+            foto_url=foto_url
+        )
+        db.session.add(nieuw)
+        db.session.commit()
+        flash(f"Global item '{naam}' toegevoegd.", "success")
+    
+    return redirect(url_for('beheer_catalogus'))
+
+
+# --- ROUTES: ARTIKELEN (Gebruiker) ---
 
 @app.route('/mijn_artikelen')
 def mijn_artikelen():
