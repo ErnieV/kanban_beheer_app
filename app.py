@@ -116,14 +116,6 @@ def beheer_infra():
         flash("Database tabellen niet geladen.", "danger")
         return redirect(url_for('beheer_dashboard'))
     
-    # Haal alles op. 
-    # Let op: Bij automap zijn relaties soms lastig direct te benaderen in Jinja 
-    # zonder expliciete configuratie. We halen lijsten los op of gebruiken 
-    # een simpele join logica in de template (of pre-processen in Python).
-    # Hier kiezen we voor het ophalen van de Vestigingen en laten de relaties aan SQLAlchemy over
-    # mits automap ze herkend heeft (meestal vestiging.ruimte_collection).
-    # Voor zekerheid sturen we losse lijsten mee als fallback of voor selects.
-    
     vestigingen = db.session.query(Vestiging).all()
     ruimtes = db.session.query(Ruimte).all()
     kasten = db.session.query(Kast).all()
@@ -146,6 +138,37 @@ def nieuwe_vestiging():
         flash(f"Vestiging '{naam}' aangemaakt.", "success")
     return redirect(url_for('beheer_infra'))
 
+@app.route('/beheer/vestiging/update/<int:id>', methods=['POST'])
+def update_vestiging(id):
+    vestiging = db.session.query(Vestiging).get(id)
+    naam = request.form.get('naam')
+    adres = request.form.get('adres')
+    
+    if vestiging and naam:
+        vestiging.naam = naam
+        vestiging.adres = adres
+        db.session.commit()
+        flash(f"Vestiging '{naam}' bijgewerkt.", "success")
+    return redirect(url_for('beheer_infra'))
+
+@app.route('/beheer/vestiging/verwijder/<int:id>', methods=['POST'])
+def verwijder_vestiging(id):
+    # Check 1: Zijn er nog ruimtes?
+    aantal_ruimtes = db.session.query(Ruimte).filter_by(vestiging_id=id).count()
+    if aantal_ruimtes > 0:
+        flash(f"Kan vestiging niet verwijderen: Er zijn nog {aantal_ruimtes} ruimtes gekoppeld. Verwijder deze eerst.", "danger")
+        return redirect(url_for('beheer_infra'))
+    
+    # Veilig om te verwijderen
+    vestiging = db.session.query(Vestiging).get(id)
+    if vestiging:
+        db.session.delete(vestiging)
+        db.session.commit()
+        flash("Vestiging verwijderd.", "success")
+    
+    return redirect(url_for('beheer_infra'))
+
+
 @app.route('/beheer/ruimte/nieuw', methods=['POST'])
 def nieuwe_ruimte():
     naam = request.form.get('naam')
@@ -158,6 +181,34 @@ def nieuwe_ruimte():
         flash(f"Ruimte '{naam}' aangemaakt.", "success")
     return redirect(url_for('beheer_infra'))
 
+@app.route('/beheer/ruimte/update/<int:id>', methods=['POST'])
+def update_ruimte(id):
+    ruimte = db.session.query(Ruimte).get(id)
+    naam = request.form.get('naam')
+    
+    if ruimte and naam:
+        ruimte.naam = naam
+        db.session.commit()
+        flash(f"Ruimte '{naam}' bijgewerkt.", "success")
+    return redirect(url_for('beheer_infra'))
+
+@app.route('/beheer/ruimte/verwijder/<int:id>', methods=['POST'])
+def verwijder_ruimte(id):
+    # Check 1: Zijn er nog kasten?
+    aantal_kasten = db.session.query(Kast).filter_by(ruimte_id=id).count()
+    if aantal_kasten > 0:
+        flash(f"Kan ruimte niet verwijderen: Er staan nog {aantal_kasten} kasten in deze ruimte.", "danger")
+        return redirect(url_for('beheer_infra'))
+        
+    ruimte = db.session.query(Ruimte).get(id)
+    if ruimte:
+        db.session.delete(ruimte)
+        db.session.commit()
+        flash("Ruimte verwijderd.", "success")
+        
+    return redirect(url_for('beheer_infra'))
+
+
 @app.route('/beheer/kast/nieuw', methods=['POST'])
 def nieuwe_kast():
     naam = request.form.get('naam')
@@ -169,6 +220,35 @@ def nieuwe_kast():
         db.session.add(nieuw)
         db.session.commit()
         flash(f"Kast '{naam}' aangemaakt.", "success")
+    return redirect(url_for('beheer_infra'))
+
+@app.route('/beheer/kast/update/<int:id>', methods=['POST'])
+def update_kast(id):
+    kast = db.session.query(Kast).get(id)
+    naam = request.form.get('naam')
+    type_opslag = request.form.get('type_opslag')
+    
+    if kast and naam:
+        kast.naam = naam
+        kast.type_opslag = type_opslag
+        db.session.commit()
+        flash(f"Kast '{naam}' bijgewerkt.", "success")
+    return redirect(url_for('beheer_infra'))
+
+@app.route('/beheer/kast/verwijder/<int:id>', methods=['POST'])
+def verwijder_kast(id):
+    # Check 1: Ligt er nog voorraad in?
+    aantal_items = db.session.query(Voorraad_Positie).filter_by(kast_id=id).count()
+    if aantal_items > 0:
+        flash(f"Kan kast niet verwijderen: Er liggen nog {aantal_items} artikelen in deze kast.", "danger")
+        return redirect(url_for('beheer_infra'))
+        
+    kast = db.session.query(Kast).get(id)
+    if kast:
+        db.session.delete(kast)
+        db.session.commit()
+        flash("Kast verwijderd.", "success")
+        
     return redirect(url_for('beheer_infra'))
 
 

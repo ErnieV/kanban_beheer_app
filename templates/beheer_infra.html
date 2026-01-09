@@ -13,28 +13,47 @@
     <!-- 1. Vestigingen -->
     <div class="col-md-4">
         <div class="card shadow-sm border-0 h-100">
-            <div class="card-header bg-white fw-bold border-bottom-0 py-3">
-                <i class="bi bi-buildings me-2 text-primary"></i>1. Vestigingen
+            <div class="card-header bg-white fw-bold border-bottom-0 py-3 d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-buildings me-2 text-primary"></i>1. Vestigingen</span>
+                <span class="badge bg-light text-dark">{{ vestigingen|length }}</span>
             </div>
             <div class="card-body bg-light-subtle">
+                <!-- Nieuwe Vestiging Form -->
                 <form action="{{ url_for('nieuwe_vestiging') }}" method="POST" class="mb-4">
                     <div class="input-group mb-2">
-                        <input type="text" name="naam" class="form-control" placeholder="Naam Vestiging" required>
+                        <input type="text" name="naam" class="form-control form-control-sm" placeholder="Naam Vestiging" required>
                     </div>
                     <div class="input-group mb-2">
-                        <input type="text" name="adres" class="form-control" placeholder="Adres (Optioneel)">
+                        <input type="text" name="adres" class="form-control form-control-sm" placeholder="Adres (Optioneel)">
                     </div>
-                    <button type="submit" class="btn btn-primary w-100 btn-sm">Toevoegen</button>
+                    <button type="submit" class="btn btn-primary w-100 btn-sm"><i class="bi bi-plus-lg me-1"></i>Toevoegen</button>
                 </form>
 
+                <!-- Lijst Vestigingen -->
                 <ul class="list-group list-group-flush rounded-3 shadow-sm">
                     {% for vestiging in vestigingen %}
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <div>
+                    <li class="list-group-item d-flex justify-content-between align-items-center p-2">
+                        <div class="text-truncate me-2">
                             <strong>{{ vestiging.naam }}</strong><br>
-                            <small class="text-muted">{{ vestiging.adres or '' }}</small>
+                            <small class="text-muted" style="font-size: 0.75rem;">{{ vestiging.adres or '-' }}</small>
                         </div>
-                        <span class="badge bg-secondary rounded-pill">{{ vestiging.bedrijf_id }}</span>
+                        <div class="d-flex gap-1">
+                            <!-- Edit Knop (Trigger Modal) -->
+                            <button class="btn btn-sm btn-outline-secondary py-0 px-1" 
+                                    data-bs-toggle="modal" 
+                                    data-bs-target="#editVestigingModal"
+                                    data-id="{{ vestiging.vestiging_id }}"
+                                    data-naam="{{ vestiging.naam }}"
+                                    data-adres="{{ vestiging.adres or '' }}">
+                                <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
+                            </button>
+                            <!-- Delete Form -->
+                            <form action="{{ url_for('verwijder_vestiging', id=vestiging.vestiging_id) }}" method="POST" onsubmit="return confirm('Weet je zeker dat je deze vestiging wilt verwijderen?');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">
+                                    <i class="bi bi-trash" style="font-size: 0.8rem;"></i>
+                                </button>
+                            </form>
+                        </div>
                     </li>
                     {% endfor %}
                 </ul>
@@ -45,31 +64,52 @@
     <!-- 2. Ruimtes -->
     <div class="col-md-4">
         <div class="card shadow-sm border-0 h-100">
-            <div class="card-header bg-white fw-bold border-bottom-0 py-3">
-                <i class="bi bi-door-open me-2 text-primary"></i>2. Ruimtes
+            <div class="card-header bg-white fw-bold border-bottom-0 py-3 d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-door-open me-2 text-primary"></i>2. Ruimtes</span>
+                <span class="badge bg-light text-dark">{{ ruimtes|length }}</span>
             </div>
             <div class="card-body bg-light-subtle">
+                <!-- Nieuwe Ruimte Form -->
                 <form action="{{ url_for('nieuwe_ruimte') }}" method="POST" class="mb-4">
-                    <select name="vestiging_id" class="form-select mb-2" required>
+                    <select name="vestiging_id" class="form-select form-select-sm mb-2" required>
                         <option value="" disabled selected>Kies Vestiging...</option>
                         {% for v in vestigingen %}
                         <option value="{{ v.vestiging_id }}">{{ v.naam }}</option>
                         {% endfor %}
                     </select>
                     <div class="input-group mb-2">
-                        <input type="text" name="naam" class="form-control" placeholder="Naam Ruimte (bv. Magazijn A)" required>
+                        <input type="text" name="naam" class="form-control form-control-sm" placeholder="Naam Ruimte" required>
                     </div>
-                    <button type="submit" class="btn btn-primary w-100 btn-sm">Toevoegen</button>
+                    <button type="submit" class="btn btn-primary w-100 btn-sm"><i class="bi bi-plus-lg me-1"></i>Toevoegen</button>
                 </form>
 
+                <!-- Lijst Ruimtes -->
                 <ul class="list-group list-group-flush rounded-3 shadow-sm">
                     {% for ruimte in ruimtes %}
-                    <li class="list-group-item">
-                        <strong>{{ ruimte.naam }}</strong>
-                        <div class="small text-muted">
-                            {% for v in vestigingen if v.vestiging_id == ruimte.vestiging_id %}
-                                <i class="bi bi-geo-alt"></i> {{ v.naam }}
-                            {% endfor %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center p-2">
+                        <div class="text-truncate me-2">
+                            <strong>{{ ruimte.naam }}</strong>
+                            <div class="small text-muted" style="font-size: 0.75rem;">
+                                {% for v in vestigingen if v.vestiging_id == ruimte.vestiging_id %}
+                                    <i class="bi bi-geo-alt me-1"></i>{{ v.naam }}
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div class="d-flex gap-1">
+                            <!-- Edit Knop -->
+                            <button class="btn btn-sm btn-outline-secondary py-0 px-1" 
+                                    data-bs-toggle="modal" 
+                                    data-bs-target="#editRuimteModal"
+                                    data-id="{{ ruimte.ruimte_id }}"
+                                    data-naam="{{ ruimte.naam }}">
+                                <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
+                            </button>
+                            <!-- Delete Form -->
+                            <form action="{{ url_for('verwijder_ruimte', id=ruimte.ruimte_id) }}" method="POST" onsubmit="return confirm('Weet je zeker dat je deze ruimte wilt verwijderen?');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">
+                                    <i class="bi bi-trash" style="font-size: 0.8rem;"></i>
+                                </button>
+                            </form>
                         </div>
                     </li>
                     {% endfor %}
@@ -81,37 +121,59 @@
     <!-- 3. Kasten -->
     <div class="col-md-4">
         <div class="card shadow-sm border-0 h-100">
-            <div class="card-header bg-white fw-bold border-bottom-0 py-3">
-                <i class="bi bi-archive me-2 text-primary"></i>3. Kasten
+            <div class="card-header bg-white fw-bold border-bottom-0 py-3 d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-archive me-2 text-primary"></i>3. Kasten</span>
+                <span class="badge bg-light text-dark">{{ kasten|length }}</span>
             </div>
             <div class="card-body bg-light-subtle">
+                <!-- Nieuwe Kast Form -->
                 <form action="{{ url_for('nieuwe_kast') }}" method="POST" class="mb-4">
-                    <select name="ruimte_id" class="form-select mb-2" required>
+                    <select name="ruimte_id" class="form-select form-select-sm mb-2" required>
                         <option value="" disabled selected>Kies Ruimte...</option>
                         {% for r in ruimtes %}
                         <option value="{{ r.ruimte_id }}">{{ r.naam }}</option>
                         {% endfor %}
                     </select>
                     <div class="input-group mb-2">
-                        <input type="text" name="naam" class="form-control" placeholder="Naam Kast (bv. Stelling 1)" required>
+                        <input type="text" name="naam" class="form-control form-control-sm" placeholder="Naam Kast" required>
                     </div>
-                    <select name="type_opslag" class="form-select mb-2">
+                    <select name="type_opslag" class="form-select form-select-sm mb-2">
                         <option value="Stellingkast">Stellingkast</option>
                         <option value="Ladenkast">Ladenkast</option>
                         <option value="Palletstelling">Palletstelling</option>
                         <option value="Koeling">Koeling</option>
                     </select>
-                    <button type="submit" class="btn btn-primary w-100 btn-sm">Toevoegen</button>
+                    <button type="submit" class="btn btn-primary w-100 btn-sm"><i class="bi bi-plus-lg me-1"></i>Toevoegen</button>
                 </form>
 
+                <!-- Lijst Kasten -->
                 <ul class="list-group list-group-flush rounded-3 shadow-sm">
                     {% for kast in kasten %}
-                    <li class="list-group-item">
-                        <strong>{{ kast.naam }}</strong> <span class="badge bg-light text-dark border">{{ kast.type_opslag }}</span>
-                        <div class="small text-muted">
-                            {% for r in ruimtes if r.ruimte_id == kast.ruimte_id %}
-                                <i class="bi bi-door-closed"></i> {{ r.naam }}
-                            {% endfor %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center p-2">
+                        <div class="text-truncate me-2">
+                            <strong>{{ kast.naam }}</strong> <span class="badge bg-light text-dark border ms-1" style="font-size: 0.65rem;">{{ kast.type_opslag }}</span>
+                            <div class="small text-muted" style="font-size: 0.75rem;">
+                                {% for r in ruimtes if r.ruimte_id == kast.ruimte_id %}
+                                    <i class="bi bi-door-closed me-1"></i>{{ r.naam }}
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div class="d-flex gap-1">
+                            <!-- Edit Knop -->
+                            <button class="btn btn-sm btn-outline-secondary py-0 px-1" 
+                                    data-bs-toggle="modal" 
+                                    data-bs-target="#editKastModal"
+                                    data-id="{{ kast.kast_id }}"
+                                    data-naam="{{ kast.naam }}"
+                                    data-type="{{ kast.type_opslag }}">
+                                <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
+                            </button>
+                            <!-- Delete Form -->
+                            <form action="{{ url_for('verwijder_kast', id=kast.kast_id) }}" method="POST" onsubmit="return confirm('Weet je zeker dat je deze kast wilt verwijderen?');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">
+                                    <i class="bi bi-trash" style="font-size: 0.8rem;"></i>
+                                </button>
+                            </form>
                         </div>
                     </li>
                     {% endfor %}
@@ -120,4 +182,138 @@
         </div>
     </div>
 </div>
+
+<!-- ================= MODALS VOOR BEWERKEN ================= -->
+
+<!-- 1. Edit Vestiging Modal -->
+<div class="modal fade" id="editVestigingModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="editVestigingForm" method="POST">
+                <div class="modal-header">
+                    <h5 class="modal-title">Vestiging Bewerken</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Naam</label>
+                        <input type="text" name="naam" id="editVestigingNaam" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Adres</label>
+                        <input type="text" name="adres" id="editVestigingAdres" class="form-control">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuleren</button>
+                    <button type="submit" class="btn btn-primary">Opslaan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 2. Edit Ruimte Modal -->
+<div class="modal fade" id="editRuimteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="editRuimteForm" method="POST">
+                <div class="modal-header">
+                    <h5 class="modal-title">Ruimte Bewerken</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Naam</label>
+                        <input type="text" name="naam" id="editRuimteNaam" class="form-control" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuleren</button>
+                    <button type="submit" class="btn btn-primary">Opslaan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 3. Edit Kast Modal -->
+<div class="modal fade" id="editKastModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="editKastForm" method="POST">
+                <div class="modal-header">
+                    <h5 class="modal-title">Kast Bewerken</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Naam</label>
+                        <input type="text" name="naam" id="editKastNaam" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Type Opslag</label>
+                        <select name="type_opslag" id="editKastType" class="form-select">
+                            <option value="Stellingkast">Stellingkast</option>
+                            <option value="Ladenkast">Ladenkast</option>
+                            <option value="Palletstelling">Palletstelling</option>
+                            <option value="Koeling">Koeling</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuleren</button>
+                    <button type="submit" class="btn btn-primary">Opslaan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- JavaScript om data in Modals te laden -->
+<script>
+    // Vestiging
+    var editVestigingModal = document.getElementById('editVestigingModal')
+    editVestigingModal.addEventListener('show.bs.modal', function (event) {
+        var button = event.relatedTarget
+        var id = button.getAttribute('data-id')
+        var naam = button.getAttribute('data-naam')
+        var adres = button.getAttribute('data-adres')
+
+        var form = document.getElementById('editVestigingForm')
+        form.action = '/beheer/vestiging/update/' + id
+        
+        document.getElementById('editVestigingNaam').value = naam
+        document.getElementById('editVestigingAdres').value = adres
+    })
+
+    // Ruimte
+    var editRuimteModal = document.getElementById('editRuimteModal')
+    editRuimteModal.addEventListener('show.bs.modal', function (event) {
+        var button = event.relatedTarget
+        var id = button.getAttribute('data-id')
+        var naam = button.getAttribute('data-naam')
+
+        var form = document.getElementById('editRuimteForm')
+        form.action = '/beheer/ruimte/update/' + id
+        
+        document.getElementById('editRuimteNaam').value = naam
+    })
+
+    // Kast
+    var editKastModal = document.getElementById('editKastModal')
+    editKastModal.addEventListener('show.bs.modal', function (event) {
+        var button = event.relatedTarget
+        var id = button.getAttribute('data-id')
+        var naam = button.getAttribute('data-naam')
+        var type = button.getAttribute('data-type')
+
+        var form = document.getElementById('editKastForm')
+        form.action = '/beheer/kast/update/' + id
+        
+        document.getElementById('editKastNaam').value = naam
+        document.getElementById('editKastType').value = type
+    })
+</script>
+
 {% endblock %}
