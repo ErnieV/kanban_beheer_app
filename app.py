@@ -24,6 +24,7 @@ connect_str = os.environ.get('AZURE_STORAGE_CONNECTION_STRING')
 container_name = os.environ.get('AZURE_CONTAINER_NAME')
 
 driver = 'ODBC+Driver+18+for+SQL+Server'
+# Ensure connection string is correct
 app.config['SQLALCHEMY_DATABASE_URI'] = f"mssql+pyodbc://{db_user}:{db_pass}@{db_server}/{db_name}?driver={driver}&TrustServerCertificate=yes"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -33,6 +34,7 @@ db = SQLAlchemy(app)
 Base = automap_base()
 
 # 1. Definieer de View Model (Onze nieuwe slimme lees-laag)
+# Views have no primary key, so we must define this manually for SQLAlchemy to work
 class ViewArtikelCompleet(db.Model):
     __tablename__ = 'vw_Artikel_Compleet'
     lokaal_artikel_id = db.Column(db.Integer, primary_key=True)
@@ -47,21 +49,39 @@ class ViewArtikelCompleet(db.Model):
     Is_Naam_Gewijzigd = db.Column(db.Boolean)
     Is_Quick_Add = db.Column(db.Boolean)
 
+# Initialize global variables for models
+Global_Catalogus = None
+Lokaal_Artikel = None
+Bedrijf = None
+Kast = None
+Ruimte = None
+Vestiging = None
+Voorraad_Positie = None
+
 # 2. Reflecteer de bestaande tabellen (Automap)
 with app.app_context():
-    Base.prepare(db.engine, reflect=True)
-    
-    # Haal de classes op uit de database
     try:
-        Global_Catalogus = Base.classes.Global_Catalogus
-        Lokaal_Artikel = Base.classes.Lokaal_Artikel
-        Bedrijf = Base.classes.Bedrijf
-        Kast = Base.classes.Kast
-        Ruimte = Base.classes.Ruimte
-        Vestiging = Base.classes.Vestiging
-        Voorraad_Positie = Base.classes.Voorraad_Positie
-    except AttributeError as e:
-        print(f"Fout bij laden tabellen: {e}")
+        # Reflect database tables
+        Base.prepare(db.engine, reflect=True)
+        
+        # Assign classes to global variables
+        # We use .get() to avoid crashing if a table is missing, but check afterwards
+        Global_Catalogus = Base.classes.get('Global_Catalogus')
+        Lokaal_Artikel = Base.classes.get('Lokaal_Artikel')
+        Bedrijf = Base.classes.get('Bedrijf')
+        Kast = Base.classes.get('Kast')
+        Ruimte = Base.classes.get('Ruimte')
+        Vestiging = Base.classes.get('Vestiging')
+        Voorraad_Positie = Base.classes.get('Voorraad_Positie')
+
+        # Log loaded tables for debugging
+        print("Tables loaded successfully:")
+        print(f"- Global_Catalogus: {'OK' if Global_Catalogus else 'MISSING'}")
+        print(f"- Lokaal_Artikel: {'OK' if Lokaal_Artikel else 'MISSING'}")
+        print(f"- Kast: {'OK' if Kast else 'MISSING'}")
+
+    except Exception as e:
+        print(f"CRITICAL ERROR LOADING DATABASE TABLES: {e}")
 
 # --- HULPFUNCTIES (Azure) ---
 def upload_to_blob(file):
@@ -81,33 +101,47 @@ def upload_to_blob(file):
 
 @app.route('/')
 def dashboard():
-    return render_template('base.html') # Of een specifiek dashboard als je dat hebt
+    return render_template('base.html')
 
 @app.route('/mijn_artikelen')
 def mijn_artikelen():
-    bedrijf_id = 1 # Hardcoded voor demo
-    # We lezen uit de VIEW voor de gecombineerde data
+    if not ViewArtikelCompleet:
+        flash("Database view niet geladen.", "danger")
+        return render_template('base.html')
+
+    bedrijf_id = 1
     artikelen = ViewArtikelCompleet.query.filter_by(bedrijf_id=bedrijf_id).all()
     return render_template('mijn_artikelen.html', artikelen=artikelen)
 
 @app.route('/catalogus')
 def catalogus():
+    if not Global_Catalogus or not Lokaal_Artikel:
+        flash("Database tabellen niet geladen. Controleer logs.", "danger")
+        return redirect(url_for('dashboard'))
+
     bedrijf_id = 1
-    alle_globals = Global_Catalogus.query.all()
-    
-    # Welke hebben we al?
-    reeds_in_bezit = db.session.query(Lokaal_Artikel.global_id).filter_by(bedrijf_id=bedrijf_id).all()
-    reeds_in_bezit_ids = [item.global_id for item in reeds_in_bezit]
-    
-    return render_template('catalogus.html', globals=alle_globals, reeds_in_bezit=reeds_in_bezit_ids)
+    try:
+        alle_globals = db.session.query(Global_Catalogus).all()
+        
+        reeds_in_bezit = db.session.query(Lokaal_Artikel.global_id).filter_by(bedrijf_id=bedrijf_id).all()
+        reeds_in_bezit_ids = [item.global_id for item in reeds_in_bezit]
+        
+        return render_template('catalogus.html', globals=alle_globals, reeds_in_bezit=reeds_in_bezit_ids)
+    except Exception as e:
+        print(f"Error in catalogus route: {e}")
+        flash(f"Fout bij ophalen catalogus: {str(e)}", "danger")
+        return redirect(url_for('dashboard'))
 
 @app.route('/catalogus/quick_add/<int:global_id>', methods=['POST'])
 def quick_add(global_id):
+    if not Lokaal_Artikel:
+        flash("Database fout.", "danger")
+        return redirect(url_for('dashboard'))
+        
     bedrijf_id = 1
-    bestaat = Lokaal_Artikel.query.filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
+    bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
     
     if not bestaat:
-        # Maak 'kaal' artikel aan -> View regelt de inheritance
         nieuw = Lokaal_Artikel(
             bedrijf_id=bedrijf_id,
             global_id=global_id,
@@ -124,11 +158,19 @@ def quick_add(global_id):
 
 @app.route('/artikel/bewerken/<int:lokaal_id>', methods=['GET', 'POST'])
 def artikel_bewerken(lokaal_id):
-    artikel = Lokaal_Artikel.query.get_or_404(lokaal_id)
+    if not Lokaal_Artikel:
+        flash("Database fout.", "danger")
+        return redirect(url_for('dashboard'))
+
+    # Use db.session.query for automapped classes to be safe
+    artikel = db.session.query(Lokaal_Artikel).get(lokaal_id)
+    if not artikel:
+        flash("Artikel niet gevonden", "danger")
+        return redirect(url_for('mijn_artikelen'))
+        
     view_data = ViewArtikelCompleet.query.get(lokaal_id)
     
     if request.method == 'POST':
-        # Velden updaten of clearen (None)
         naam = request.form.get('eigen_naam', '').strip()
         artikel.eigen_naam = naam if naam else None
         
@@ -148,7 +190,10 @@ def artikel_bewerken(lokaal_id):
 
 @app.route('/kasten')
 def kast_selectie():
-    # Query: Kast + Ruimte + Vestiging
+    if not Kast:
+        flash("Database fout: Kasten tabel niet geladen.", "danger")
+        return render_template('base.html')
+
     kasten = db.session.query(Kast, Ruimte, Vestiging)\
         .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
         .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
@@ -157,10 +202,13 @@ def kast_selectie():
 
 @app.route('/kast/<int:kast_id>', methods=['GET', 'POST'])
 def kast_inhoud(kast_id):
+    if not Kast or not Voorraad_Positie:
+         flash("Database fout.", "danger")
+         return redirect(url_for('kast_selectie'))
+
     bedrijf_id = 1
-    kast = Kast.query.get_or_404(kast_id)
+    kast = db.session.query(Kast).get_or_404(kast_id)
     
-    # 1. POST: Nieuwe positie toevoegen
     if request.method == 'POST':
         artikel_id = request.form.get('artikel_id')
         min_val = request.form.get('trigger_min')
@@ -169,8 +217,7 @@ def kast_inhoud(kast_id):
         
         locatie_url = upload_to_blob(foto_file)
         
-        # Check dubbelingen
-        bestaat = Voorraad_Positie.query.filter_by(kast_id=kast_id, lokaal_artikel_id=artikel_id).first()
+        bestaat = db.session.query(Voorraad_Positie).filter_by(kast_id=kast_id, lokaal_artikel_id=artikel_id).first()
         if not bestaat:
             nieuw = Voorraad_Positie(
                 bedrijf_id=bedrijf_id,
@@ -189,15 +236,11 @@ def kast_inhoud(kast_id):
             
         return redirect(url_for('kast_inhoud', kast_id=kast_id))
 
-    # 2. GET: Toon inhoud
-    # We halen de inhoud op (Tuple van 3 objecten voor de tabel)
     inhoud = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus)\
         .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
         .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
         .filter(Voorraad_Positie.kast_id == kast_id).all()
         
-    # UPDATE: Voor de dropdown lijst gebruiken we nu de VIEW
-    # Zodat de namen in de dropdown kloppen met de catalogus
     alle_artikelen = ViewArtikelCompleet.query.filter_by(bedrijf_id=bedrijf_id).all()
     
     return render_template('kast_inhoud.html', 
