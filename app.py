@@ -1,5 +1,6 @@
 import os
 import uuid
+import urllib.parse
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.ext.automap import automap_base
@@ -21,8 +22,16 @@ db_pass = os.environ.get('DB_PASS')
 connect_str = os.environ.get('AZURE_STORAGE_CONNECTION_STRING')
 container_name = os.environ.get('AZURE_CONTAINER_NAME')
 
+# Check of variabelen bestaan om vage errors te voorkomen
+if not all([db_server, db_name, db_user, db_pass]):
+    raise ValueError("Database configuratie ontbreekt! Check je Environment Variables.")
+
+# Veilig encoden van user/pass (voor speciale tekens zoals '@' of '!')
+encoded_user = urllib.parse.quote_plus(db_user)
+encoded_pass = urllib.parse.quote_plus(db_pass)
+
 driver = 'ODBC+Driver+18+for+SQL+Server'
-app.config['SQLALCHEMY_DATABASE_URI'] = f"mssql+pyodbc://{db_user}:{db_pass}@{db_server}/{db_name}?driver={driver}&TrustServerCertificate=yes"
+app.config['SQLALCHEMY_DATABASE_URI'] = f"mssql+pyodbc://{encoded_user}:{encoded_pass}@{db_server}/{db_name}?driver={driver}&TrustServerCertificate=yes"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
