@@ -1,0 +1,77 @@
+<!-- Bestand: templates/mijn_artikelen.html -->
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2>Mijn Assortiment</h2>
+        <p class="text-muted mb-0">Beheer je lokale artikelen en overrides.</p>
+    </div>
+    <a href="{{ url_for('catalogus') }}" class="btn btn-success shadow-sm">
+        <i class="bi bi-journal-plus me-1"></i> Zoek in Catalogus
+    </a>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="bg-light">
+                    <tr>
+                        <th class="ps-4 py-3 text-secondary text-uppercase small fw-bold">Foto</th>
+                        <th class="py-3 text-secondary text-uppercase small fw-bold">Artikel</th>
+                        <th class="py-3 text-secondary text-uppercase small fw-bold">Nummer & Prijs</th>
+                        <th class="text-end pe-4 py-3 text-secondary text-uppercase small fw-bold">Actie</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for artikel in artikelen %}
+                    <tr>
+                        <td class="ps-4">
+                            {% if artikel.Display_Foto %}
+                                <img src="{{ artikel.Display_Foto }}" class="rounded-3 shadow-sm" width="50" height="50" style="object-fit: cover;">
+                            {% else %}
+                                <div class="bg-light rounded-3 d-flex align-items-center justify-content-center text-muted border" style="width: 50px; height: 50px;">
+                                    <i class="bi bi-box-seam"></i>
+                                </div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="fw-semibold text-dark">{{ artikel.Display_Naam }}</div>
+                            {% if artikel.Is_Global_Linked %}
+                                <span class="badge bg-info bg-opacity-10 text-info border border-info border-opacity-25 rounded-pill fw-normal" style="font-size: 0.7rem;">
+                                    <i class="bi bi-globe me-1"></i>Catalogus
+                                </span>
+                            {% endif %}
+                            {% if artikel.Is_Naam_Gewijzigd %}
+                                <span class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25 rounded-pill fw-normal" style="font-size: 0.7rem;">
+                                    <i class="bi bi-pencil me-1"></i>Eigen naam
+                                </span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="small text-muted">Nr: <span class="text-dark fw-medium">{{ artikel.Display_Nummer or '-' }}</span></div>
+                            <div class="small text-muted">Prijs: <span class="text-dark fw-medium">{{ "€ %.2f"|format(artikel.Display_Prijs) if artikel.Display_Prijs else '-' }}</span></div>
+                        </td>
+                        <td class="text-end pe-4">
+                            <a href="{{ url_for('artikel_bewerken', lokaal_id=artikel.lokaal_artikel_id) }}" class="btn btn-sm btn-outline-secondary">
+                                <i class="bi bi-pencil-square"></i> Bewerken
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    
+                    {% if not artikelen %}
+                    <tr>
+                        <td colspan="4" class="text-center py-5">
+                            <div class="text-muted mb-3"><i class="bi bi-basket fs-1"></i></div>
+                            <p class="text-muted">Je hebt nog geen artikelen.</p>
+                            <a href="{{ url_for('catalogus') }}" class="btn btn-outline-primary btn-sm">Ga naar Catalogus</a>
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

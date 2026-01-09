@@ -1,79 +1,153 @@
+<!-- Bestand: templates/kast_inhoud.html -->
 {% extends "base.html" %}
 {% block content %}
-<a href="{{ url_for('kast_selectie') }}" class="btn btn-outline-secondary mb-3">&laquo; Terug naar overzicht</a>
+<div class="mb-4">
+    <a href="{{ url_for('kast_selectie') }}" class="text-decoration-none text-muted fw-medium d-inline-flex align-items-center hover-primary">
+        <i class="bi bi-arrow-left me-1"></i> Terug naar overzicht
+    </a>
+</div>
 
-<h2>Inhoud van: {{ kast.naam }}</h2>
-
-<div class="card mb-4 bg-light">
-    <div class="card-body">
-        <h5 class="card-title">Artikel toevoegen aan deze kast</h5>
-        <form method="POST" enctype="multipart/form-data" class="row g-3 align-items-end">
-            <div class="col-md-4">
-                <label class="form-label">Artikel</label>
-                <select name="artikel_id" class="form-select" required>
-                    <option value="" selected disabled>Kies een artikel...</option>
-                    {% for art in artikelen %}
-                    <option value="{{ art.lokaal_artikel_id }}">{{ art.eigen_naam }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label">Min</label>
-                <input type="number" name="trigger_min" class="form-control" value="2" required>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label">Max</label>
-                <input type="number" name="target_max" class="form-control" value="5" required>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label small">Kamer Foto (Optioneel)</label>
-                <input type="file" name="locatie_foto" class="form-control form-control-sm" accept=".png">
-            </div>
-            <div class="col-md-2">
-                <button type="submit" class="btn btn-primary w-100">Toevoegen</button>
-            </div>
-        </form>
+<div class="d-flex align-items-center mb-4">
+    <div class="p-3 bg-white shadow-sm rounded-circle me-3 text-primary border">
+        <i class="bi bi-layers-fill fs-3"></i>
+    </div>
+    <div>
+        <h2 class="mb-0">{{ kast.naam }}</h2>
+        <div class="text-muted small">
+            <span class="me-3"><i class="bi bi-building me-1"></i>{{ kast.type_opslag }}</span>
+            <span><i class="bi bi-card-checklist me-1"></i>Kanban Configuratie</span>
+        </div>
     </div>
 </div>
 
-<table class="table align-middle">
-    <thead>
-        <tr>
-            <th>Product</th>
-            <th>Min</th>
-            <th>Max</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for positie, artikel, global in inhoud %}
-        <tr>
-            <td>
-                <div class="d-flex align-items-center">
-                    {# Waterval Logica: Positie > Lokaal > Global #}
-                    {% if positie.locatie_foto_url %}
-                        {# 1. Specifieke Kamer Foto #}
-                        <img src="{{ positie.locatie_foto_url }}" class="me-2" height="60" style="object-fit: contain; border: 2px solid blue;" title="Specifieke kamer foto">
-                    {% elif artikel.foto_url %}
-                        {# 2. Lokale Artikel Foto #}
-                        <img src="{{ artikel.foto_url }}" class="me-2" height="60" style="object-fit: contain; border: 2px solid orange;" title="Lokale bedrijfsfoto">
-                    {% elif global and global.foto_url %}
-                        {# 3. Global Catalogus Foto #}
-                        <img src="{{ global.foto_url }}" class="me-2" height="60" style="object-fit: contain;" title="Standaard Global foto">
-                    {% else %}
-                        {# 4. Geen foto #}
-                        <div class="me-2 bg-secondary text-white d-flex align-items-center justify-content-center" style="width: 60px; height: 60px;">?</div>
-                    {% endif %}
-                    
-                    <div>
-                        <strong>{{ artikel.eigen_naam }}</strong><br>
-                        <small class="text-muted">{{ artikel.verpakkingseenheid_tekst }}</small>
-                    </div>
+<div class="row g-4">
+    <!-- Links: Formulier Kaart -->
+    <div class="col-lg-4">
+        <div class="card h-100 border-0 shadow-sm bg-light-subtle">
+            <div class="card-body p-4">
+                <div class="d-flex align-items-center mb-4 text-primary">
+                    <i class="bi bi-plus-square-fill fs-5 me-2"></i>
+                    <h5 class="card-title mb-0">Positie Toevoegen</h5>
                 </div>
-            </td>
-            <td><span class="badge bg-warning text-dark">{{ positie.trigger_min }}</span></td>
-            <td><span class="badge bg-success">{{ positie.target_max }}</span></td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+                
+                <form method="POST" enctype="multipart/form-data" class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label small fw-bold text-muted text-uppercase">Selecteer Artikel</label>
+                        <select name="artikel_id" class="form-select shadow-sm" required>
+                            <option value="" selected disabled>Kies uit assortiment...</option>
+                            {% for art in artikelen %}
+                                <!-- Gebruik Display_Naam indien beschikbaar (via View), anders fallback -->
+                                <option value="{{ art.lokaal_artikel_id }}">
+                                    {{ art.Display_Naam if art.Display_Naam is defined else (art.eigen_naam or 'Naamloos/Global Item') }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="col-6">
+                        <label class="form-label small fw-bold text-muted text-uppercase">Min (Trigger)</label>
+                        <div class="input-group shadow-sm">
+                            <span class="input-group-text bg-white border-end-0 text-warning"><i class="bi bi-bell-fill"></i></span>
+                            <input type="number" name="trigger_min" class="form-control border-start-0" value="2" required>
+                        </div>
+                    </div>
+                    
+                    <div class="col-6">
+                        <label class="form-label small fw-bold text-muted text-uppercase">Max (Target)</label>
+                        <div class="input-group shadow-sm">
+                            <span class="input-group-text bg-white border-end-0 text-success"><i class="bi bi-bullseye"></i></span>
+                            <input type="number" name="target_max" class="form-control border-start-0" value="5" required>
+                        </div>
+                    </div>
+                    
+                    <div class="col-12">
+                        <label class="form-label small fw-bold text-muted text-uppercase">Locatie Foto (Optioneel)</label>
+                        <input type="file" name="locatie_foto" class="form-control shadow-sm" accept=".png">
+                        <div class="form-text small fst-italic">Foto van de specifieke bak/haak in deze kast.</div>
+                    </div>
+                    
+                    <div class="col-12 mt-4">
+                        <button type="submit" class="btn btn-primary w-100 fw-semibold shadow-sm py-2">
+                            Toevoegen aan Kast
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rechts: Inhoud Tabel -->
+    <div class="col-lg-8">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white py-3 px-4 border-bottom d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">Huidige Inhoud</h5>
+                <span class="badge bg-secondary rounded-pill">{{ inhoud|length }} Posities</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="bg-light">
+                        <tr>
+                            <th class="ps-4 text-secondary text-uppercase small fw-bold">Artikel & Locatie</th>
+                            <th class="text-center text-secondary text-uppercase small fw-bold">Min</th>
+                            <th class="text-center text-secondary text-uppercase small fw-bold">Max</th>
+                            <th class="text-end pe-4 text-secondary text-uppercase small fw-bold">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for positie, artikel, global in inhoud %}
+                        <tr>
+                            <td class="ps-4">
+                                <div class="d-flex align-items-center">
+                                    <div class="position-relative me-3">
+                                        {# Waterval Logica Weergave #}
+                                        {% if positie.locatie_foto_url %}
+                                            <img src="{{ positie.locatie_foto_url }}" class="shadow-sm border border-2 border-primary" height="50" width="50" style="object-fit: cover; border-radius: 10px;" title="Locatie Foto">
+                                            <span class="position-absolute top-0 start-100 translate-middle p-1 bg-primary border border-light rounded-circle" style="width: 10px; height: 10px;"></span>
+                                        {% elif artikel.foto_url %}
+                                            <img src="{{ artikel.foto_url }}" class="shadow-sm border border-2 border-warning" height="50" width="50" style="object-fit: cover; border-radius: 10px;" title="Artikel Foto">
+                                        {% elif global and global.foto_url %}
+                                            <img src="{{ global.foto_url }}" class="shadow-sm" height="50" width="50" style="object-fit: cover; border-radius: 10px;" title="Global Foto">
+                                        {% else %}
+                                            <div class="bg-light rounded-3 d-flex align-items-center justify-content-center text-muted border shadow-sm" style="width: 50px; height: 50px;">
+                                                <i class="bi bi-box-seam"></i>
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                    <div>
+                                        <!-- Gebruik fallback naar global.generieke_naam -->
+                                        <div class="fw-bold text-dark">{{ artikel.eigen_naam or global.generieke_naam }}</div>
+                                        <div class="small text-muted">{{ artikel.verpakkingseenheid_tekst }}</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="text-center">
+                                <span class="badge bg-warning text-warning bg-opacity-10 border border-warning border-opacity-25 px-3 rounded-pill">{{ positie.trigger_min }}</span>
+                            </td>
+                            <td class="text-center">
+                                <span class="badge bg-success text-success bg-opacity-10 border border-success border-opacity-25 px-3 rounded-pill">{{ positie.target_max }}</span>
+                            </td>
+                            <td class="text-end pe-4">
+                                <button class="btn btn-icon btn-sm btn-light text-muted" title="Opties">
+                                    <i class="bi bi-three-dots-vertical"></i>
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        
+                        {% if not inhoud %}
+                        <tr>
+                            <td colspan="4" class="text-center py-5">
+                                <div class="text-muted opacity-50 mb-2">
+                                    <i class="bi bi-inbox fs-1"></i>
+                                </div>
+                                <p class="text-muted small mb-0">Deze kast is nog leeg.</p>
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
