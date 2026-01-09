@@ -1,0 +1,67 @@
+<!-- Bestand: templates/beheer_bedrijf.html -->
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('beheer_dashboard') }}" class="text-decoration-none text-muted fw-medium">
+        <i class="bi bi-arrow-left me-1"></i> Terug naar Beheer
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-md-8 col-lg-6 mx-auto">
+        <div class="card shadow-sm border-0">
+            <div class="card-header bg-white py-3">
+                <h4 class="mb-0"><i class="bi bi-building-gear text-primary me-2"></i>Bedrijfsinstellingen</h4>
+            </div>
+            <div class="card-body p-4">
+                
+                {% if bedrijf %}
+                <div class="text-center mb-4">
+                    <div class="d-inline-block position-relative">
+                        {% if bedrijf.logo_url %}
+                            <img src="{{ bedrijf.logo_url }}" class="rounded shadow-sm border p-1" style="max-height: 120px; max-width: 100%;">
+                        {% else %}
+                            <div class="bg-light border rounded d-flex align-items-center justify-content-center text-muted" style="width: 120px; height: 120px; font-size: 3rem;">
+                                <i class="bi bi-building"></i>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Bedrijfsnaam</label>
+                        <input type="text" name="naam" class="form-control" value="{{ bedrijf.naam if bedrijf else '' }}" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">KvK Nummer</label>
+                        <input type="text" name="kvk_nummer" class="form-control" value="{{ bedrijf.kvk_nummer if bedrijf else '' }}">
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">Nieuw Logo Uploaden</label>
+                        <input type="file" name="logo" class="form-control" accept=".png,.jpg,.jpeg">
+                        <div class="form-text">Wordt gebruikt in de navigatiebalk en op kanban kaartjes.</div>
+                    </div>
+
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-save me-1"></i> Opslaan
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <div class="alert alert-light border mt-4 text-center">
+            <small class="text-muted">
+                <i class="bi bi-info-circle me-1"></i> 
+                Huidig Bedrijf ID: <strong>{{ bedrijf.bedrijf_id if bedrijf else 'Nieuw' }}</strong>. 
+                Dit is momenteel de actieve context voor alle gebruikers.
+            </small>
+        </div>
+    </div>
+</div>
+{% endblock %}
