@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Kies een Kast om in te richten</h2>
+<div class="list-group">
+    {% for kast, ruimte, vestiging in kasten %}
+    <a href="{{ url_for('kast_inhoud', kast_id=kast.kast_id) }}" class="list-group-item list-group-item-action">
+        <div class="d-flex w-100 justify-content-between">
+            <h5 class="mb-1">{{ kast.naam }}</h5>
+            <small>{{ vestiging.naam }}</small>
+        </div>
+        <p class="mb-1">Locatie: {{ ruimte.naam }}</p>
+    </a>
+    {% endfor %}
+</div>
+{% endblock %}

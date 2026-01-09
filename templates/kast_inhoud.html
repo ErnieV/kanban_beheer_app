@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<a href="{{ url_for('kast_selectie') }}" class="btn btn-outline-secondary mb-3">&laquo; Terug naar overzicht</a>
+
+<h2>Inhoud van: {{ kast.naam }}</h2>
+
+<div class="card mb-4 bg-light">
+    <div class="card-body">
+        <h5 class="card-title">Artikel toevoegen aan deze kast</h5>
+        <form method="POST" enctype="multipart/form-data" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label">Artikel</label>
+                <select name="artikel_id" class="form-select" required>
+                    <option value="" selected disabled>Kies een artikel...</option>
+                    {% for art in artikelen %}
+                    <option value="{{ art.lokaal_artikel_id }}">{{ art.eigen_naam }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Min</label>
+                <input type="number" name="trigger_min" class="form-control" value="2" required>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Max</label>
+                <input type="number" name="target_max" class="form-control" value="5" required>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small">Kamer Foto (Optioneel)</label>
+                <input type="file" name="locatie_foto" class="form-control form-control-sm" accept=".png">
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">Toevoegen</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<table class="table align-middle">
+    <thead>
+        <tr>
+            <th>Product</th>
+            <th>Min</th>
+            <th>Max</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for positie, artikel, global in inhoud %}
+        <tr>
+            <td>
+                <div class="d-flex align-items-center">
+                    {# Waterval Logica: Positie > Lokaal > Global #}
+                    {% if positie.locatie_foto_url %}
+                        {# 1. Specifieke Kamer Foto #}
+                        <img src="{{ positie.locatie_foto_url }}" class="me-2" height="60" style="object-fit: contain; border: 2px solid blue;" title="Specifieke kamer foto">
+                    {% elif artikel.foto_url %}
+                        {# 2. Lokale Artikel Foto #}
+                        <img src="{{ artikel.foto_url }}" class="me-2" height="60" style="object-fit: contain; border: 2px solid orange;" title="Lokale bedrijfsfoto">
+                    {% elif global and global.foto_url %}
+                        {# 3. Global Catalogus Foto #}
+                        <img src="{{ global.foto_url }}" class="me-2" height="60" style="object-fit: contain;" title="Standaard Global foto">
+                    {% else %}
+                        {# 4. Geen foto #}
+                        <div class="me-2 bg-secondary text-white d-flex align-items-center justify-content-center" style="width: 60px; height: 60px;">?</div>
+                    {% endif %}
+                    
+                    <div>
+                        <strong>{{ artikel.eigen_naam }}</strong><br>
+                        <small class="text-muted">{{ artikel.verpakkingseenheid_tekst }}</small>
+                    </div>
+                </div>
+            </td>
+            <td><span class="badge bg-warning text-dark">{{ positie.trigger_min }}</span></td>
+            <td><span class="badge bg-success">{{ positie.target_max }}</span></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

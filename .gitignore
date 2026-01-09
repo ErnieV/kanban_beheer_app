@@ -1,0 +1,8 @@
+bin/
+obj/
+
+local.settings.json
+*.user
+.venv/
+__pycache__/
+*.pyc
