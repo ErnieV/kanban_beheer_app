@@ -4,7 +4,7 @@ import urllib.parse
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.ext.automap import automap_base
-from sqlalchemy.exc import IntegrityError # <--- Toegevoegd voor error handling
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, or_
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
@@ -128,7 +128,7 @@ def assistent_kamers():
         ruimtes_query = db.session.query(Ruimte, Vestiging)\
             .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
             .filter(Vestiging.bedrijf_id == bedrijf_id)\
-            .order_by(Vestiging.naam, Ruimte.nummer, Ruimte.naam).all()
+            .order_by(Vestiging.naam, Ruimte.nummer, Ruimte.naam).all() 
             
         ruimtes_data = []
         for ruimte, vestiging in ruimtes_query:
@@ -382,23 +382,19 @@ def beheer_catalogus():
                     url = upload_image_to_azure(file)
                     if url and "ERROR" not in url: item.foto_url = url
                 db.session.commit()
-                usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
-                if usage_count > 0:
-                    flash(f'Item bijgewerkt. Let op: dit item wordt gebruikt door {usage_count} bedrijven.', 'warning')
-                else:
-                    flash('Item bijgewerkt.', 'success')
+                flash('Item bijgewerkt.', 'success')
 
         elif actie == 'verwijder_global':
             global_id = request.form.get('global_id')
             usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
             if usage_count > 0:
-                flash(f'Kan item NIET verwijderen: het is in gebruik bij {usage_count} bedrijven.', 'danger')
+                flash(f'Kan item NIET verwijderen: in gebruik.', 'danger')
             else:
                 item = db.session.query(Global_Catalogus).get(global_id)
                 if item:
                     db.session.delete(item)
                     db.session.commit()
-                    flash('Item verwijderd uit globale catalogus.', 'success')
+                    flash('Item verwijderd.', 'success')
 
         return redirect(url_for('beheer_catalogus'))
 
@@ -427,6 +423,10 @@ def beheer_infra():
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
     
+    # Filter parameters ophalen
+    active_vestiging_id = request.args.get('vestiging_id', type=int)
+    active_ruimte_id = request.args.get('ruimte_id', type=int)
+
     if request.method == 'POST':
         actie = request.form.get('actie')
         
@@ -437,9 +437,10 @@ def beheer_infra():
                 flash('Vestiging aangemaakt.', 'success')
             
             elif actie == 'nieuwe_ruimte':
+                vest_id = request.form.get('vestiging_id')
                 nieuwe_ruimte = Ruimte(
                     bedrijf_id=bedrijf_id, 
-                    vestiging_id=request.form.get('vestiging_id'), 
+                    vestiging_id=vest_id, 
                     naam=request.form.get('naam'),
                     nummer=request.form.get('nummer'),
                     type_ruimte='KAMER'
@@ -477,15 +478,22 @@ def beheer_infra():
                 else:
                     db.session.commit()
                     flash('Nieuwe lege ruimte aangemaakt.', 'success')
+                
+                # Redirect terug naar dezelfde view met filters
+                return redirect(url_for('beheer_infra', vestiging_id=vest_id))
 
             elif actie == 'nieuwe_kast':
-                db.session.add(Kast(bedrijf_id=bedrijf_id, ruimte_id=request.form.get('ruimte_id'), naam=request.form.get('naam'), type_opslag=request.form.get('type_opslag')))
+                ruimte_id = request.form.get('ruimte_id')
+                # Haal vestiging_id op voor correcte redirect
+                ruimte = db.session.query(Ruimte).get(ruimte_id)
+                db.session.add(Kast(bedrijf_id=bedrijf_id, ruimte_id=ruimte_id, naam=request.form.get('naam'), type_opslag=request.form.get('type_opslag')))
                 db.session.commit()
                 flash('Kast aangemaakt.', 'success')
+                
+                return redirect(url_for('beheer_infra', vestiging_id=ruimte.vestiging_id, ruimte_id=ruimte_id))
         
         except IntegrityError as e:
             db.session.rollback()
-            # Specifieke constraint check voor de gebruiker
             if "CHK_Kast_Type" in str(e):
                 flash("Fout: Ongeldig type opslag gekozen. Kies 'Grijpvoorraad' of 'Bulkvoorraad'.", 'danger')
             else:
@@ -494,17 +502,38 @@ def beheer_infra():
             db.session.rollback()
             flash(f"Er ging iets mis: {e}", 'danger')
 
-        return redirect(url_for('beheer_infra'))
+        return redirect(url_for('beheer_infra', vestiging_id=active_vestiging_id, ruimte_id=active_ruimte_id))
     
+    # DATA OPHALEN MET FILTERS
     vestigingen = db.session.query(Vestiging).filter_by(bedrijf_id=bedrijf_id).all()
-    ruimtes = db.session.query(Ruimte).join(Vestiging).filter(Vestiging.bedrijf_id == bedrijf_id).all()
-    kasten = db.session.query(Kast).join(Ruimte).join(Vestiging).filter(Vestiging.bedrijf_id == bedrijf_id).all()
     
-    return render_template('beheer_infra.html', vestigingen=vestigingen, ruimtes=ruimtes, kasten=kasten)
+    ruimtes = []
+    if active_vestiging_id:
+        ruimtes = db.session.query(Ruimte).filter_by(vestiging_id=active_vestiging_id).order_by(Ruimte.nummer, Ruimte.naam).all()
+        
+    kasten = []
+    if active_ruimte_id:
+        kasten = db.session.query(Kast).filter_by(ruimte_id=active_ruimte_id).all()
+    
+    # Alle ruimtes ophalen voor de 'kopieer' dropdown (die moet altijd vol zijn)
+    alle_ruimtes = db.session.query(Ruimte).join(Vestiging).filter(Vestiging.bedrijf_id == bedrijf_id).all()
+    
+    return render_template('beheer_infra.html', 
+                           vestigingen=vestigingen, 
+                           ruimtes=ruimtes, 
+                           kasten=kasten,
+                           alle_ruimtes=alle_ruimtes,
+                           active_vestiging_id=active_vestiging_id,
+                           active_ruimte_id=active_ruimte_id)
 
 @app.route('/beheer/verwijder/<type>/<int:id>', methods=['POST'])
 def verwijder_item(type, id):
     redirect_url = url_for('beheer_infra')
+    # Probeer filters te behouden bij redirect
+    vestiging_id = request.args.get('vestiging_id')
+    ruimte_id = request.args.get('ruimte_id')
+    if vestiging_id: redirect_url = url_for('beheer_infra', vestiging_id=vestiging_id, ruimte_id=ruimte_id)
+
     try:
         item = None
         if type == 'artikel':
@@ -528,6 +557,10 @@ def verwijder_item(type, id):
 
 @app.route('/beheer/update/<type>/<int:id>', methods=['POST'])
 def update_item(type, id):
+    # Probeer filters te behouden
+    redirect_url = url_for('beheer_infra')
+    if 'vestiging_id' in request.form: redirect_url = url_for('beheer_infra', vestiging_id=request.form.get('vestiging_id'))
+
     try:
         if type == 'vestiging':
             item = db.session.query(Vestiging).get(id)
@@ -552,7 +585,7 @@ def update_item(type, id):
     except Exception as e:
         db.session.rollback()
         flash(f'Fout: {e}', 'danger')
-    return redirect(url_for('beheer_infra'))
+    return redirect(redirect_url)
 
 if __name__ == '__main__':
     app.run(debug=True)
