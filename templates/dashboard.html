@@ -38,10 +38,11 @@
             <div class="card-body">
                 <p>Beheer de voorraad in de kamers en je eigen assortiment.</p>
                 <div class="d-grid gap-2">
-                    <a href="{{ url_for('assistent_kamers') }}" class="btn btn-primary btn-lg">
-                        <i class="bi bi-door-open-fill"></i> Mijn Kamers
+                    <!-- AANGEPAST: Stijl consistent met rechterkant, maar wel primary voor de hoofdactie -->
+                    <a href="{{ url_for('assistent_kamers') }}" class="btn btn-outline-primary text-start">
+                        <i class="bi bi-door-open-fill"></i> Naar mijn Kamers
                     </a>
-                    <a href="{{ url_for('artikelen_beheer') }}" class="btn btn-outline-primary">
+                    <a href="{{ url_for('artikelen_beheer') }}" class="btn btn-outline-primary text-start">
                         <i class="bi bi-box-seam"></i> Mijn Artikelen
                     </a>
                 </div>

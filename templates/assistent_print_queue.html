@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('dashboard') }}" class="text-decoration-none text-muted">
+        <i class="bi bi-arrow-left"></i> Terug naar Dashboard
+    </a>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2><i class="bi bi-printer"></i> Print Wachtrij</h2>
+    <span class="badge bg-primary">{{ queue_items|length }} aanvragen</span>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body p-0">
+        <table class="table table-striped table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Omschrijving</th>
+                    <th style="width: 180px;">Aangevraagd</th>
+                    <th style="width: 100px;">Status</th>
+                    <th style="width: 100px;" class="text-end">Actie</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in queue_items %}
+                <tr>
+                    <td>
+                        <strong>{{ item.omschrijving }}</strong>
+                    </td>
+                    <td class="text-muted small">
+                        {{ item.aangemaakt_op.strftime('%d-%m-%Y %H:%M') }}
+                    </td>
+                    <td>
+                        {% if item.status == 'PENDING' %}
+                            <span class="badge bg-warning text-dark"><i class="bi bi-hourglass-split"></i> Wacht</span>
+                        {% else %}
+                            <span class="badge bg-secondary">{{ item.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <form action="{{ url_for('annuleren_print_opdracht', print_id=item.print_id) }}" method="POST" onsubmit="return confirm('Aanvraag annuleren?');">
+                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Annuleren">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center py-5 text-muted">
+                        <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                        De printwachtrij is leeg.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
