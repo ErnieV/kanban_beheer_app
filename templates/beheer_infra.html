@@ -44,7 +44,7 @@
                                     data-adres="{{ vestiging.adres or '' }}">
                                 <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
                             </button>
-                            <form action="{{ url_for('verwijder_item', type='vestiging', id=vestiging.vestiging_id) }}" method="POST" onsubmit="return confirm('Weet je zeker?');">
+                            <form action="{{ url_for('verwijder_item', type='vestiging', id=vestiging.vestiging_id) }}" method="POST" onsubmit="return confirm('Weet je zeker dat je deze vestiging wilt verwijderen?');">
                                 <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">
                                     <i class="bi bi-trash" style="font-size: 0.8rem;"></i>
                                 </button>
@@ -74,7 +74,6 @@
                         {% endfor %}
                     </select>
                     
-                    <!-- NIEUW: NUMMER EN NAAM -->
                     <div class="input-group mb-2">
                         <input type="text" name="nummer" class="form-control form-control-sm" placeholder="Nr (1.04)" style="max-width: 80px;">
                         <input type="text" name="naam" class="form-control form-control-sm" placeholder="Naam Ruimte" required>
@@ -85,7 +84,9 @@
                         <select name="kopieer_van_ruimte_id" class="form-select form-select-sm border-info bg-light">
                             <option value="">- Lege kamer -</option>
                             {% for r in ruimtes %}
-                                <option value="{{ r.ruimte_id }}">{{ r.naam }}</option>
+                                <option value="{{ r.ruimte_id }}">
+                                    {% if r.nummer %}{{ r.nummer }} - {% endif %}{{ r.naam }}
+                                </option>
                             {% endfor %}
                         </select>
                     </div>
@@ -97,7 +98,6 @@
                     {% for ruimte in ruimtes %}
                     <li class="list-group-item d-flex justify-content-between align-items-center p-2">
                         <div class="text-truncate me-2">
-                            <!-- WEERGAVE: NUMMER + NAAM -->
                             <strong>{% if ruimte.nummer %}{{ ruimte.nummer }} - {% endif %}{{ ruimte.naam }}</strong>
                             <div class="small text-muted" style="font-size: 0.75rem;">
                                 {% for v in vestigingen if v.vestiging_id == ruimte.vestiging_id %}
@@ -140,18 +140,24 @@
                     <select name="ruimte_id" class="form-select form-select-sm mb-2" required>
                         <option value="" disabled selected>Kies Ruimte...</option>
                         {% for r in ruimtes %}
-                        <option value="{{ r.ruimte_id }}">{{ r.naam }}</option>
+                        <option value="{{ r.ruimte_id }}">
+                            {% if r.nummer %}{{ r.nummer }} - {% endif %}{{ r.naam }}
+                        </option>
                         {% endfor %}
                     </select>
                     <div class="input-group mb-2">
-                        <input type="text" name="naam" class="form-control form-control-sm" placeholder="Naam Kast" required>
+                        <input type="text" name="naam" class="form-control form-control-sm" placeholder="Naam Kast (bv. Koelkast)" required>
                     </div>
+                    
+                    <!-- AANGEPASTE KAST TYPES VOOR DB COMPATIBILITEIT -->
                     <select name="type_opslag" class="form-select form-select-sm mb-2">
-                        <option value="Stellingkast">Stellingkast</option>
-                        <option value="Ladenkast">Ladenkast</option>
-                        <option value="Palletstelling">Palletstelling</option>
-                        <option value="Koeling">Koeling</option>
+                        <option value="GRIJP">Grijpvoorraad (Behandelkamer/Kast)</option>
+                        <option value="BULK">Bulkvoorraad (Centraal Magazijn)</option>
                     </select>
+                    <div class="form-text text-muted mb-2" style="font-size: 0.7rem;">
+                        <i class="bi bi-info-circle"></i> Onderscheid type (Koelkast/Lade) kan in de naam.
+                    </div>
+                    
                     <button type="submit" class="btn btn-primary w-100 btn-sm"><i class="bi bi-plus-lg me-1"></i>Toevoegen</button>
                 </form>
 
@@ -159,10 +165,11 @@
                     {% for kast in kasten %}
                     <li class="list-group-item d-flex justify-content-between align-items-center p-2">
                         <div class="text-truncate me-2">
-                            <strong>{{ kast.naam }}</strong> <span class="badge bg-light text-dark border ms-1" style="font-size: 0.65rem;">{{ kast.type_opslag }}</span>
+                            <strong>{{ kast.naam }}</strong> 
+                            <span class="badge bg-light text-dark border ms-1" style="font-size: 0.65rem;">{{ kast.type_opslag }}</span>
                             <div class="small text-muted" style="font-size: 0.75rem;">
                                 {% for r in ruimtes if r.ruimte_id == kast.ruimte_id %}
-                                    <i class="bi bi-door-closed me-1"></i>{{ r.naam }}
+                                    <i class="bi bi-door-closed me-1"></i>{% if r.nummer %}{{ r.nummer }} - {% endif %}{{ r.naam }}
                                 {% endfor %}
                             </div>
                         </div>
@@ -262,11 +269,10 @@
                     <div class="mb-3">
                         <label class="form-label">Type Opslag</label>
                         <select name="type_opslag" id="editKastType" class="form-select">
-                            <option value="Stellingkast">Stellingkast</option>
-                            <option value="Ladenkast">Ladenkast</option>
-                            <option value="Palletstelling">Palletstelling</option>
-                            <option value="Koeling">Koeling</option>
+                            <option value="GRIJP">Grijpvoorraad</option>
+                            <option value="BULK">Bulkvoorraad</option>
                         </select>
+                        <div class="form-text">Grijp = Werkvoorraad, Bulk = Centraal</div>
                     </div>
                 </div>
                 <div class="modal-footer">

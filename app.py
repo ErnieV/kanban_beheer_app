@@ -4,6 +4,7 @@ import urllib.parse
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.ext.automap import automap_base
+from sqlalchemy.exc import IntegrityError # <--- Toegevoegd voor error handling
 from sqlalchemy import func, or_
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
@@ -127,7 +128,7 @@ def assistent_kamers():
         ruimtes_query = db.session.query(Ruimte, Vestiging)\
             .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
             .filter(Vestiging.bedrijf_id == bedrijf_id)\
-            .order_by(Vestiging.naam, Ruimte.nummer, Ruimte.naam).all() # Sorteer nu ook op nummer
+            .order_by(Vestiging.naam, Ruimte.nummer, Ruimte.naam).all()
             
         ruimtes_data = []
         for ruimte, vestiging in ruimtes_query:
@@ -161,7 +162,6 @@ def assistent_kamer_view(ruimte_id):
     
     return render_template('assistent_kamer_view.html', ruimte=ruimte, kasten_data=kasten_data, alle_artikelen=alle_artikelen)
 
-# FIX: De database ID heet waarschijnlijk voorraad_positie_id, niet positie_id
 @app.route('/assistent/update-voorraad/<int:voorraad_positie_id>', methods=['POST'])
 def update_voorraad_positie(voorraad_positie_id):
     positie = db.session.query(Voorraad_Positie).get(voorraad_positie_id)
@@ -198,7 +198,7 @@ def add_to_kast_from_room(kast_id):
 # =========================================================
 #  ARTIKEL BEHEER
 # =========================================================
-# (Ongewijzigd, maar wel nodig voor de context)
+
 @app.route('/artikelen-beheer', methods=['GET', 'POST'])
 def artikelen_beheer():
     if not check_db(): return redirect(url_for('dashboard'))
@@ -350,6 +350,7 @@ def beheer_catalogus():
             if file:
                 url = upload_image_to_azure(file)
                 if url and "ERROR" not in url: nieuw.foto_url = url
+            
             db.session.add(nieuw)
             db.session.commit()
             flash('Global item aangemaakt.', 'success')
@@ -381,19 +382,23 @@ def beheer_catalogus():
                     url = upload_image_to_azure(file)
                     if url and "ERROR" not in url: item.foto_url = url
                 db.session.commit()
-                flash('Item bijgewerkt.', 'success')
+                usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
+                if usage_count > 0:
+                    flash(f'Item bijgewerkt. Let op: dit item wordt gebruikt door {usage_count} bedrijven.', 'warning')
+                else:
+                    flash('Item bijgewerkt.', 'success')
 
         elif actie == 'verwijder_global':
             global_id = request.form.get('global_id')
             usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
             if usage_count > 0:
-                flash(f'Kan item NIET verwijderen: in gebruik.', 'danger')
+                flash(f'Kan item NIET verwijderen: het is in gebruik bij {usage_count} bedrijven.', 'danger')
             else:
                 item = db.session.query(Global_Catalogus).get(global_id)
                 if item:
                     db.session.delete(item)
                     db.session.commit()
-                    flash('Item verwijderd.', 'success')
+                    flash('Item verwijderd uit globale catalogus.', 'success')
 
         return redirect(url_for('beheer_catalogus'))
 
@@ -425,23 +430,25 @@ def beheer_infra():
     if request.method == 'POST':
         actie = request.form.get('actie')
         
-        if actie == 'nieuwe_vestiging':
-            db.session.add(Vestiging(bedrijf_id=bedrijf_id, naam=request.form.get('naam'), adres=request.form.get('adres')))
-        
-        elif actie == 'nieuwe_ruimte':
-            nieuwe_ruimte = Ruimte(
-                bedrijf_id=bedrijf_id, 
-                vestiging_id=request.form.get('vestiging_id'), 
-                naam=request.form.get('naam'),
-                nummer=request.form.get('nummer'), # NIEUW: Nummer opslaan
-                type_ruimte='KAMER'
-            )
-            db.session.add(nieuwe_ruimte)
-            db.session.flush()
+        try:
+            if actie == 'nieuwe_vestiging':
+                db.session.add(Vestiging(bedrijf_id=bedrijf_id, naam=request.form.get('naam'), adres=request.form.get('adres')))
+                db.session.commit()
+                flash('Vestiging aangemaakt.', 'success')
+            
+            elif actie == 'nieuwe_ruimte':
+                nieuwe_ruimte = Ruimte(
+                    bedrijf_id=bedrijf_id, 
+                    vestiging_id=request.form.get('vestiging_id'), 
+                    naam=request.form.get('naam'),
+                    nummer=request.form.get('nummer'),
+                    type_ruimte='KAMER'
+                )
+                db.session.add(nieuwe_ruimte)
+                db.session.flush()
 
-            kopieer_id = request.form.get('kopieer_van_ruimte_id')
-            if kopieer_id:
-                try:
+                kopieer_id = request.form.get('kopieer_van_ruimte_id')
+                if kopieer_id:
                     bron_kasten = db.session.query(Kast).filter_by(ruimte_id=kopieer_id).all()
                     for bron_kast in bron_kasten:
                         nieuwe_kast = Kast(
@@ -465,16 +472,28 @@ def beheer_infra():
                                 locatie_foto_url=pos.locatie_foto_url
                             )
                             db.session.add(nieuw_pos)
+                    db.session.commit()
                     flash('Ruimte inclusief inrichting gekopieerd!', 'success')
-                except Exception as e:
-                    flash(f'Ruimte aangemaakt, maar fout bij kopiëren: {e}', 'warning')
-            else:
-                flash('Nieuwe lege ruimte aangemaakt.', 'success')
+                else:
+                    db.session.commit()
+                    flash('Nieuwe lege ruimte aangemaakt.', 'success')
 
-        elif actie == 'nieuwe_kast':
-            db.session.add(Kast(bedrijf_id=bedrijf_id, ruimte_id=request.form.get('ruimte_id'), naam=request.form.get('naam'), type_opslag=request.form.get('type_opslag')))
+            elif actie == 'nieuwe_kast':
+                db.session.add(Kast(bedrijf_id=bedrijf_id, ruimte_id=request.form.get('ruimte_id'), naam=request.form.get('naam'), type_opslag=request.form.get('type_opslag')))
+                db.session.commit()
+                flash('Kast aangemaakt.', 'success')
         
-        db.session.commit()
+        except IntegrityError as e:
+            db.session.rollback()
+            # Specifieke constraint check voor de gebruiker
+            if "CHK_Kast_Type" in str(e):
+                flash("Fout: Ongeldig type opslag gekozen. Kies 'Grijpvoorraad' of 'Bulkvoorraad'.", 'danger')
+            else:
+                flash(f"Database fout (IntegrityError): {e.orig}", 'danger')
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Er ging iets mis: {e}", 'danger')
+
         return redirect(url_for('beheer_infra'))
     
     vestigingen = db.session.query(Vestiging).filter_by(bedrijf_id=bedrijf_id).all()
@@ -517,14 +536,21 @@ def update_item(type, id):
         elif type == 'ruimte':
             item = db.session.query(Ruimte).get(id)
             item.naam = request.form.get('naam')
-            item.nummer = request.form.get('nummer') # NIEUW: Nummer updaten
+            item.nummer = request.form.get('nummer')
         elif type == 'kast':
             item = db.session.query(Kast).get(id)
             item.naam = request.form.get('naam')
             item.type_opslag = request.form.get('type_opslag')
         db.session.commit()
         flash('Item bijgewerkt.', 'success')
+    except IntegrityError as e:
+        db.session.rollback()
+        if "CHK_Kast_Type" in str(e):
+            flash("Fout: Ongeldig type opslag. Kies 'Grijpvoorraad' of 'Bulkvoorraad'.", 'danger')
+        else:
+            flash(f"Database fout: {e.orig}", 'danger')
     except Exception as e:
+        db.session.rollback()
         flash(f'Fout: {e}', 'danger')
     return redirect(url_for('beheer_infra'))
 
