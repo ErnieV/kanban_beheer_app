@@ -1,24 +1,37 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>Catalogus Beheer</h2>
-<p>Hier beheer je de centrale catalogus en bepaal je wat Vivaldi in het assortiment opneemt.</p>
+<p class="text-muted">Beheer hier de centrale database (Global) en koppel artikelen aan je eigen assortiment.</p>
 
 <div class="row">
+    <!-- Links: Nieuw Global Item -->
     <div class="col-md-4">
-        <div class="card mb-4">
-            <div class="card-header">Nieuw Global Item</div>
+        <div class="card shadow-sm">
+            <div class="card-header bg-light">
+                <strong><i class="bi bi-plus-circle"></i> Nieuw Global Item</strong>
+            </div>
             <div class="card-body">
                 <form method="POST" enctype="multipart/form-data">
                     <input type="hidden" name="actie" value="nieuw_global">
-                    <div class="mb-2">
-                        <input type="text" name="naam" class="form-control" placeholder="Naam (bv. Paracetamol 500mg)" required>
+                    <div class="mb-3">
+                        <label class="form-label">Naam</label>
+                        <input type="text" name="naam" class="form-control" placeholder="Bijv. Paracetamol 500mg" required>
                     </div>
-                    <div class="mb-2">
-                        <input type="text" name="ean" class="form-control" placeholder="EAN Code">
+                    <div class="mb-3">
+                        <label class="form-label">EAN / Referentie</label>
+                        <input type="text" name="ean" class="form-control">
                     </div>
-                    <div class="mb-2">
+                    <div class="mb-3">
+                        <label class="form-label">Categorie</label>
+                        <select name="categorie" class="form-select">
+                            <option value="Algemeen">Algemeen</option>
+                            <option value="Verbandmiddelen">Verbandmiddelen</option>
+                            <option value="Medicatie">Medicatie</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Afbeelding</label>
                         <input type="file" name="afbeelding" class="form-control" accept=".png">
-                        <small class="text-muted">Alleen .png</small>
                     </div>
                     <button type="submit" class="btn btn-success w-100">Toevoegen aan Global</button>
                 </form>
@@ -26,44 +39,65 @@
         </div>
     </div>
 
+    <!-- Rechts: Lijst met indicatoren -->
     <div class="col-md-8">
-        <div class="card">
-            <div class="card-header">Beschikbare Catalogus Items</div>
+        <div class="card shadow-sm">
+            <div class="card-header bg-light">
+                <strong><i class="bi bi-list"></i> Beschikbare Items</strong>
+            </div>
             <div class="card-body p-0">
-                <table class="table table-striped mb-0">
-                    <thead>
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
                         <tr>
-                            <th>Afbeelding</th>
-                            <th>Naam</th>
-                            <th>Actie</th>
+                            <th style="width: 60px;">Foto</th>
+                            <th>Artikel</th>
+                            <th class="text-center">Status</th>
+                            <th class="text-end">Actie</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% if catalogus %}
-                            {% for item in catalogus %}
-                            <tr>
-                                <td>
-                                    {% if item.foto_url %}
-                                        <img src="{{ item.foto_url }}" height="40">
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                                <td>{{ item.generieke_naam }}</td>
-                                <td>
-                                    <form method="POST" class="d-inline">
-                                        <input type="hidden" name="actie" value="koppel_lokaal">
-                                        <input type="hidden" name="global_id" value="{{ item.global_id }}">
-                                        <button type="submit" class="btn btn-sm btn-primary">
-                                            + Voeg toe aan Assortiment
-                                        </button>
-                                    </form>
-                                </td>
-                            </tr>
-                            {% endfor %}
+                        {% for item in globals %}
+                        <tr>
+                            <td>
+                                {% if item.foto_url %}
+                                    <img src="{{ item.foto_url }}" height="40" class="rounded">
+                                {% else %}
+                                    <div class="bg-secondary text-white rounded d-flex align-items-center justify-content-center" style="width:40px; height:40px;">?</div>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <strong>{{ item.generieke_naam }}</strong><br>
+                                <small class="text-muted">{{ item.ean_code or 'Geen EAN' }}</small>
+                            </td>
+                            <td class="text-center">
+                                <!-- SLIMME INDICATOR -->
+                                {% if item.global_id in lokale_ids %}
+                                    <span class="badge bg-success rounded-pill" title="Dit artikel zit in jouw assortiment">
+                                        <i class="bi bi-check-lg"></i> Lokaal
+                                    </span>
+                                {% else %}
+                                    <span class="badge bg-secondary rounded-pill" title="Alleen in Global Catalogus">
+                                        <i class="bi bi-globe"></i> Global
+                                    </span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end">
+                                {% if item.global_id not in lokale_ids %}
+                                <form method="POST" class="d-inline">
+                                    <input type="hidden" name="actie" value="koppel_lokaal">
+                                    <input type="hidden" name="global_id" value="{{ item.global_id }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-primary">
+                                        <i class="bi bi-plus"></i> Opnemen
+                                    </button>
+                                </form>
+                                {% else %}
+                                    <button class="btn btn-sm btn-light" disabled>Reeds gekoppeld</button>
+                                {% endif %}
+                            </td>
+                        </tr>
                         {% else %}
-                            <tr><td colspan="3" class="text-center p-3">Nog geen items in de catalogus.</td></tr>
-                        {% endif %}
+                        <tr><td colspan="4" class="text-center py-4">Nog geen items gevonden.</td></tr>
+                        {% endfor %}
                     </tbody>
                 </table>
             </div>

@@ -36,18 +36,25 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# --- AUTOMAP & ERROR HANDLING ---
+# --- AUTOMAP & MODELS ---
 Base = automap_base()
 db_operational = False
-db_error_msg = ""
 
-# Probeer verbinding te maken en tabellen te laden
+# We definiëren globale variabelen voor de classes
+Global_Catalogus = None
+Lokaal_Artikel = None
+Voorraad_Positie = None
+Bedrijf = None
+Vestiging = None
+Ruimte = None
+Kast = None
+Leverancier = None
+
 with app.app_context():
     try:
         Base.prepare(db.engine, reflect=True)
         
-        # We halen de classes veilig op. Als automap faalt, is de class None.
-        # Dit voorkomt de 'NameError' crash later in de code.
+        # Haal de classes veilig op
         Global_Catalogus = getattr(Base.classes, 'Global_Catalogus', None)
         Lokaal_Artikel = getattr(Base.classes, 'Lokaal_Artikel', None)
         Voorraad_Positie = getattr(Base.classes, 'Voorraad_Positie', None)
@@ -56,47 +63,46 @@ with app.app_context():
         Ruimte = getattr(Base.classes, 'Ruimte', None)
         Kast = getattr(Base.classes, 'Kast', None)
         Leverancier = getattr(Base.classes, 'Leverancier', None)
-        
-        if Global_Catalogus: # Simpele check of het gelukt is
+
+        if Global_Catalogus and Bedrijf:
             db_operational = True
-            print("Database succesvol verbonden en tabellen geladen.")
+            print("Database succesvol verbonden.")
         else:
-            db_error_msg = "Tabellen niet gevonden (Automap faalde). Check tabennamen in DB."
-            print(db_error_msg)
-            
+            print("WAARSCHUWING: Niet alle tabellen konden worden geladen.")
+
     except Exception as e:
-        db_operational = False
-        db_error_msg = str(e)
         print(f"CRITIQUE DB ERROR: {e}")
+
+# --- CONTEXT PROCESSOR (NIEUW) ---
+@app.context_processor
+def inject_bedrijf_context():
+    """Zorgt dat 'huidig_bedrijf' beschikbaar is in ALLE templates."""
+    if db_operational and Bedrijf:
+        # Hardcoded op 1 voor deze fase, later dynamisch
+        bedrijf = db.session.query(Bedrijf).get(1)
+        return dict(huidig_bedrijf=bedrijf)
+    return dict(huidig_bedrijf=None)
 
 # --- HELPER FUNCTIES ---
 
 def check_db():
-    """Geeft True als DB werkt, anders abort met 500."""
     if not db_operational:
-        flash(f"Database fout: {db_error_msg}", 'danger')
+        flash("Geen verbinding met de database.", 'danger')
         return False
     return True
 
 def upload_image_to_azure(file):
-    """Uploadt een bestand naar Azure Blob en geeft de URL terug."""
-    if not file or file.filename == '':
-        return None
-    
-    if not file.filename.lower().endswith('.png'):
-        return "ERROR_TYPE"
+    if not file or file.filename == '': return None
+    if not file.filename.lower().endswith('.png'): return "ERROR_TYPE"
 
     try:
         filename = secure_filename(file.filename)
         unique_filename = f"{uuid.uuid4()}-{filename}"
-
-        if not connect_str:
-            return "ERROR_CONFIG"
+        if not connect_str: return "ERROR_CONFIG"
 
         blob_service_client = BlobServiceClient.from_connection_string(connect_str)
         blob_client = blob_service_client.get_blob_client(container=container_name, blob=unique_filename)
         blob_client.upload_blob(file)
-
         return blob_client.url
     except Exception as e:
         print(f"Upload error: {e}")
@@ -106,74 +112,62 @@ def upload_image_to_azure(file):
 
 @app.route('/')
 def dashboard():
-    """De nieuwe startpagina met logische taken."""
     return render_template('dashboard.html', db_status=db_operational)
 
-# === ASSISTENTE ROUTES ===
-
+# === ASSISTENT ROUTES ===
 @app.route('/assistent/kasten')
 def assistent_kasten():
-    """Stap 1 voor assistente: Kies je werkplek."""
-    if not check_db(): return render_template('dashboard.html', db_status=False)
-    
+    if not check_db(): return redirect(url_for('dashboard'))
     try:
-        # Toon kasten gegroepeerd (eenvoudige lijst voor nu)
         kasten = db.session.query(Kast, Ruimte, Vestiging)\
             .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
             .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
             .order_by(Vestiging.naam, Ruimte.naam, Kast.naam).all()
         return render_template('kast_selectie.html', kasten=kasten)
     except Exception as e:
-        return f"Fout bij laden kasten: {e}", 500
+        return f"Error: {e}", 500
 
 @app.route('/assistent/kast/<int:kast_id>', methods=['GET', 'POST'])
 def assistent_kast_inhoud(kast_id):
-    """De werkplek van de assistente: beheer inhoud van één kast."""
     if not check_db(): return redirect(url_for('dashboard'))
-    
     huidig_bedrijf_id = 1
+    
     gekozen_kast = db.session.query(Kast).get(kast_id)
     
     if request.method == 'POST':
-        # Artikel toevoegen aan deze kast
         artikel_id = request.form.get('artikel_id')
-        min_val = request.form.get('trigger_min')
-        max_val = request.form.get('target_max')
         
-        # Check of het artikel al op de kar ligt
-        bestaat_al = db.session.query(Voorraad_Positie).filter_by(kast_id=kast_id, lokaal_artikel_id=artikel_id).first()
-        
-        if bestaat_al:
-            flash('Dit artikel ligt al op deze kar!', 'warning')
+        # Check dubbelingen
+        bestaat = db.session.query(Voorraad_Positie).filter_by(kast_id=kast_id, lokaal_artikel_id=artikel_id).first()
+        if bestaat:
+            flash('Dit artikel ligt al in deze kast.', 'warning')
         else:
-            # Check of er een specifieke foto is geupload voor deze positie
-            locatie_file = request.files.get('locatie_foto')
-            locatie_url = None
-            if locatie_file:
-                res = upload_image_to_azure(locatie_file)
-                if res and "ERROR" not in str(res): locatie_url = res
-
-            nieuwe_positie = Voorraad_Positie(
+            nieuw = Voorraad_Positie(
                 bedrijf_id=huidig_bedrijf_id,
                 kast_id=kast_id,
                 lokaal_artikel_id=artikel_id,
                 strategie='TWO_BIN',
-                trigger_min=min_val,
-                target_max=max_val,
-                locatie_foto_url=locatie_url
+                trigger_min=request.form.get('trigger_min'),
+                target_max=request.form.get('target_max')
             )
-            db.session.add(nieuwe_positie)
+            # Foto upload
+            file = request.files.get('locatie_foto')
+            if file:
+                url = upload_image_to_azure(file)
+                if url and "ERROR" not in url: nieuw.locatie_foto_url = url
+            
+            db.session.add(nieuw)
             db.session.commit()
-            flash('Artikel toegevoegd aan kast.', 'success')
+            flash('Artikel toegevoegd.', 'success')
         return redirect(url_for('assistent_kast_inhoud', kast_id=kast_id))
 
-    # Haal de inhoud op
+    # Haal inhoud op (SLIMME WEERGAVE LOGICA)
+    # We joinen alles zodat we in de template de 'inheritance' kunnen tonen
     inhoud = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus)\
         .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
         .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
         .filter(Voorraad_Positie.kast_id == kast_id).all()
-    
-    # Lijst voor de dropdown (alleen lokale artikelen)
+        
     alle_artikelen = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=huidig_bedrijf_id).order_by(Lokaal_Artikel.eigen_naam).all()
     
     return render_template('kast_inhoud.html', kast=gekozen_kast, inhoud=inhoud, artikelen=alle_artikelen)
@@ -182,93 +176,63 @@ def assistent_kast_inhoud(kast_id):
 
 @app.route('/beheer/catalogus', methods=['GET', 'POST'])
 def beheer_catalogus():
-    """Beheerder: Globale catalogus en leveranciers."""
-    if not check_db(): return render_template('dashboard.html', db_status=False)
-    
+    if not check_db(): return redirect(url_for('dashboard'))
     huidig_bedrijf_id = 1
     
     if request.method == 'POST':
         actie = request.form.get('actie')
         
         if actie == 'nieuw_global':
-            # Voeg toe aan globale catalogus
-            naam = request.form.get('naam')
-            ean = request.form.get('ean')
-            cat = request.form.get('categorie')
-            # Upload eventueel een plaatje
+            # Global item aanmaken
+            nieuw = Global_Catalogus(
+                generieke_naam=request.form.get('naam'),
+                ean_code=request.form.get('ean'),
+                categorie=request.form.get('categorie')
+            )
             file = request.files.get('afbeelding')
-            img_url = None
             if file:
-                res = upload_image_to_azure(file)
-                if res and "ERROR" not in res: img_url = res
-
-            nieuw = Global_Catalogus(generieke_naam=naam, ean_code=ean, categorie=cat, foto_url=img_url)
+                url = upload_image_to_azure(file)
+                if url and "ERROR" not in url: nieuw.foto_url = url
+            
             db.session.add(nieuw)
             db.session.commit()
-            flash(f'Globale catalogus item "{naam}" aangemaakt.', 'success')
-        
-        elif actie == 'koppel_lokaal':
-            # Maak lokaal artikel van een globaal item
-            global_id = request.form.get('global_id')
-            global_item = db.session.query(Global_Catalogus).get(global_id)
+            flash('Global item aangemaakt.', 'success')
             
-            # Check of we hem al hebben
+        elif actie == 'koppel_lokaal':
+            # Koppel global aan lokaal (Assortiment opnemen)
+            global_id = request.form.get('global_id')
             bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=huidig_bedrijf_id, global_id=global_id).first()
-            if bestaat:
-                flash('Dit artikel zit al in je lokale assortiment.', 'warning')
-            else:
+            
+            if not bestaat:
+                global_item = db.session.query(Global_Catalogus).get(global_id)
                 nieuw_lokaal = Lokaal_Artikel(
                     bedrijf_id=huidig_bedrijf_id,
                     global_id=global_id,
-                    eigen_naam=global_item.generieke_naam, # Neem naam over, kan later gewijzigd
-                    verpakkingseenheid_tekst="Stuk" # Default
+                    eigen_naam=global_item.generieke_naam, # Default: neem naam over
+                    verpakkingseenheid_tekst="Stuk"
                 )
                 db.session.add(nieuw_lokaal)
                 db.session.commit()
-                flash('Artikel toegevoegd aan lokaal assortiment.', 'success')
-
+                flash('Opgenomen in lokaal assortiment.', 'success')
+            else:
+                flash('Dit artikel zit al in je assortiment.', 'warning')
+                
         return redirect(url_for('beheer_catalogus'))
 
-    try:
-        # Haal alles op. 
-        # Left join om te zien of we het artikel lokaal al hebben
-        catalogus_items = db.session.query(Global_Catalogus).all()
-        # Voor de netheid zouden we hier een left join met Lokaal_Artikel kunnen doen om te tonen "Al in assortiment"
-        
-        return render_template('beheer_catalogus.html', catalogus=catalogus_items)
-    except Exception as e:
-        return f"Fout bij laden catalogus: {e}", 500
+    # Haal Global items op
+    globals = db.session.query(Global_Catalogus).all()
+    
+    # Haal Lokaal assortiment op om te checken wat we al hebben
+    # (Dit is een simpele manier om 'Is_Global_Linked' te checken in de template)
+    lokale_ids = [a.global_id for a in db.session.query(Lokaal_Artikel.global_id).filter_by(bedrijf_id=huidig_bedrijf_id).all()]
+    
+    return render_template('beheer_catalogus.html', globals=globals, lokale_ids=lokale_ids)
 
-@app.route('/beheer/infra', methods=['GET', 'POST'])
+@app.route('/beheer/infra')
 def beheer_infra():
-    """Beheerder: Kamers en Kasten aanmaken."""
-    if not check_db(): return render_template('dashboard.html', db_status=False)
-    
-    huidig_bedrijf_id = 1
-    if request.method == 'POST':
-        # Simpele implementatie voor demo: alleen Vestiging/Ruimte/Kast aanmaken
-        actie = request.form.get('actie')
-        if actie == 'nieuwe_ruimte':
-            vestiging_id = request.form.get('vestiging_id')
-            naam = request.form.get('naam')
-            nieuw = Ruimte(bedrijf_id=huidig_bedrijf_id, vestiging_id=vestiging_id, naam=naam, type_ruimte='KAMER')
-            db.session.add(nieuw)
-            db.session.commit()
-            flash('Ruimte aangemaakt', 'success')
-        # ... (overige acties analoog)
-        return redirect(url_for('beheer_infra'))
-
-    vestigingen = db.session.query(Vestiging).filter_by(bedrijf_id=huidig_bedrijf_id).all()
-    ruimtes = db.session.query(Ruimte).filter_by(bedrijf_id=huidig_bedrijf_id).all()
-    
-    return render_template('beheer_infra.html', vestigingen=vestigingen, ruimtes=ruimtes)
-
-# Oude routes (redirects voor backward compatibility)
-@app.route('/artikelen')
-def artikelen_redirect(): return redirect(url_for('beheer_catalogus'))
-
-@app.route('/kast-beheer')
-def kast_redirect(): return redirect(url_for('assistent_kasten'))
+    if not check_db(): return redirect(url_for('dashboard'))
+    # (Vereenvoudigd voor nu)
+    return render_template('beheer_infra.html', vestigingen=[], ruimtes=[])
 
 if __name__ == '__main__':
     app.run(debug=True)
