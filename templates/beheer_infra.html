@@ -31,7 +31,6 @@
             <div class="col-md-8">
                 <div class="d-flex flex-wrap gap-2">
                     {% for rt in ruimte_types %}
-                        <!-- AANGEPAST: default filter toegevoegd voor robuustheid -->
                         <div class="badge rounded-pill d-flex align-items-center p-2" style="background-color: {{ rt.kleur_hex|default('#3B82F6') }}; color: white; border: 1px solid rgba(0,0,0,0.1);">
                             <span class="me-2">{{ rt.naam }}</span>
                             <form action="{{ url_for('verwijder_item', type='ruimte_type', id=rt.ruimte_type_id) }}" method="POST" class="m-0 p-0 d-inline-block">
@@ -68,18 +67,23 @@
                     <button type="submit" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-lg"></i> Toevoegen</button>
                 </form>
 
-                <!-- Lijst (DIV voor links) -->
+                <!-- Lijst -->
                 <div class="list-group list-group-flush rounded-3 shadow-sm">
                     {% for vestiging in vestigingen %}
                         {% set is_active = (vestiging.vestiging_id == active_vestiging_id) %}
-                        <a href="{{ url_for('beheer_infra', vestiging_id=vestiging.vestiging_id) }}" 
-                           class="list-group-item list-group-item-action d-flex justify-content-between align-items-center p-2 {{ 'active' if is_active else '' }}">
-                            <div class="text-truncate me-2">
-                                <strong>{{ vestiging.naam }}</strong><br>
-                                <small class="{{ 'text-white-50' if is_active else 'text-muted' }}" style="font-size: 0.75rem;">{{ vestiging.adres or '-' }}</small>
-                            </div>
+                        <!-- DIV ipv A als container, zodat buttons apart werken -->
+                        <div class="list-group-item d-flex justify-content-between align-items-center p-2 {{ 'active' if is_active else '' }}">
+                            <!-- Link voor selectie -->
+                            <a href="{{ url_for('beheer_infra', vestiging_id=vestiging.vestiging_id) }}" 
+                               class="text-decoration-none flex-grow-1 {{ 'text-white' if is_active else 'text-dark' }}">
+                                <div class="text-truncate">
+                                    <strong>{{ vestiging.naam }}</strong><br>
+                                    <small class="{{ 'text-white-50' if is_active else 'text-muted' }}" style="font-size: 0.75rem;">{{ vestiging.adres or '-' }}</small>
+                                </div>
+                            </a>
                             
-                            <div class="d-flex gap-1" onclick="event.preventDefault();"> 
+                            <!-- Actie knoppen -->
+                            <div class="d-flex gap-1 ms-2"> 
                                 <button class="btn btn-sm {{ 'btn-light text-primary' if is_active else 'btn-outline-secondary' }} py-0 px-1" 
                                         data-bs-toggle="modal" 
                                         data-bs-target="#editVestigingModal"
@@ -94,7 +98,7 @@
                                     </button>
                                 </form>
                             </div>
-                        </a>
+                        </div>
                     {% endfor %}
                 </div>
             </div>
@@ -142,16 +146,18 @@
                     <button type="submit" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-lg"></i> Toevoegen</button>
                 </form>
 
-                <!-- Lijst (DIV voor links) -->
+                <!-- Lijst -->
                 <div class="list-group list-group-flush rounded-3 shadow-sm">
                     {% for ruimte in ruimtes %}
                         {% set is_active_r = (ruimte.ruimte_id == active_ruimte_id) %}
-                        <a href="{{ url_for('beheer_infra', vestiging_id=active_vestiging_id, ruimte_id=ruimte.ruimte_id) }}" 
-                           class="list-group-item list-group-item-action d-flex justify-content-between align-items-center p-2 {{ 'active' if is_active_r else '' }}">
-                            <div class="text-truncate me-2">
-                                <strong>{% if ruimte.nummer %}{{ ruimte.nummer }} - {% endif %}{{ ruimte.naam }}</strong>
-                            </div>
-                            <div class="d-flex gap-1" onclick="event.preventDefault();">
+                        <div class="list-group-item d-flex justify-content-between align-items-center p-2 {{ 'active' if is_active_r else '' }}">
+                            <a href="{{ url_for('beheer_infra', vestiging_id=active_vestiging_id, ruimte_id=ruimte.ruimte_id) }}" 
+                               class="text-decoration-none flex-grow-1 {{ 'text-white' if is_active_r else 'text-dark' }}">
+                                <div class="text-truncate">
+                                    <strong>{% if ruimte.nummer %}{{ ruimte.nummer }} - {% endif %}{{ ruimte.naam }}</strong>
+                                </div>
+                            </a>
+                            <div class="d-flex gap-1 ms-2">
                                 <button class="btn btn-sm {{ 'btn-light text-primary' if is_active_r else 'btn-outline-secondary' }} py-0 px-1" 
                                         data-bs-toggle="modal" 
                                         data-bs-target="#editRuimteModal"
@@ -168,7 +174,7 @@
                                     </button>
                                 </form>
                             </div>
-                        </a>
+                        </div>
                     {% endfor %}
                 </div>
             </div>
@@ -193,6 +199,8 @@
                 <form action="{{ url_for('beheer_infra') }}" method="POST" class="mb-4">
                     <input type="hidden" name="actie" value="nieuwe_kast">
                     <input type="hidden" name="ruimte_id" value="{{ active_ruimte_id }}">
+                    <!-- Behoud vestiging ID voor redirect -->
+                    <input type="hidden" name="vestiging_id" value="{{ active_vestiging_id }}">
                     
                     <div class="input-group input-group-sm mb-2">
                         <input type="text" name="naam" class="form-control" placeholder="Naam Kast" required>
@@ -204,7 +212,7 @@
                     <button type="submit" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-lg"></i> Toevoegen</button>
                 </form>
 
-                <!-- AANGEPAST: UL vervangen door DIV om editor validatiefouten te voorkomen -->
+                <!-- Lijst -->
                 <div class="list-group list-group-flush rounded-3 shadow-sm">
                     {% for kast in kasten %}
                     <div class="list-group-item d-flex justify-content-between align-items-center p-2">
