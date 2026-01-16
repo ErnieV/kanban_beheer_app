@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row text-center mt-5">
+    <div class="col-12">
+        <h1 class="display-4">Vivaldi Voorraad</h1>
+        <p class="lead">Goedemorgen! Wat wil je vandaag doen?</p>
+        
+        {% if not db_status %}
+        <div class="alert alert-danger">
+            <strong>Let op:</strong> Geen verbinding met de database. Sommige functies werken niet.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="row mt-4 justify-content-center">
+    <!-- VOOR DE ASSISTENTE -->
+    <div class="col-md-5">
+        <div class="card h-100 shadow-sm border-primary">
+            <div class="card-header bg-primary text-white">
+                <h4 class="my-0">👩‍⚕️ Assistente</h4>
+            </div>
+            <div class="card-body">
+                <p>Beheer de voorraad in de behandelkamers.</p>
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('assistent_kasten') }}" class="btn btn-primary btn-lg">
+                        Naar de Kasten
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- VOOR DE BEHEERDER -->
+    <div class="col-md-5">
+        <div class="card h-100 shadow-sm border-secondary">
+            <div class="card-header bg-secondary text-white">
+                <h4 class="my-0">🛠️ Beheerder</h4>
+            </div>
+            <div class="card-body">
+                <p>Beheer het assortiment en de inrichting.</p>
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('beheer_catalogus') }}" class="btn btn-outline-secondary">
+                        Catalogus & Assortiment
+                    </a>
+                    <a href="{{ url_for('beheer_infra') }}" class="btn btn-outline-secondary">
+                        Kamers & Kasten
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

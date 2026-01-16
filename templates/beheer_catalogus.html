@@ -1,72 +1,73 @@
-<!-- Bestand: templates/beheer_catalogus.html -->
 {% extends "base.html" %}
 {% block content %}
-<div class="mb-4">
-    <a href="{{ url_for('beheer_dashboard') }}" class="text-decoration-none text-muted fw-medium">
-        <i class="bi bi-arrow-left me-1"></i> Terug naar Beheer
-    </a>
-</div>
+<h2>Catalogus Beheer</h2>
+<p>Hier beheer je de centrale catalogus en bepaal je wat Vivaldi in het assortiment opneemt.</p>
 
-<div class="row align-items-center mb-4">
-    <div class="col">
-        <h2 class="mb-0">Globale Catalogus Beheer</h2>
-        <p class="text-muted mb-0">Voeg standaardartikelen toe voor alle gebruikers.</p>
+<div class="row">
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header">Nieuw Global Item</div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    <input type="hidden" name="actie" value="nieuw_global">
+                    <div class="mb-2">
+                        <input type="text" name="naam" class="form-control" placeholder="Naam (bv. Paracetamol 500mg)" required>
+                    </div>
+                    <div class="mb-2">
+                        <input type="text" name="ean" class="form-control" placeholder="EAN Code">
+                    </div>
+                    <div class="mb-2">
+                        <input type="file" name="afbeelding" class="form-control" accept=".png">
+                        <small class="text-muted">Alleen .png</small>
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">Toevoegen aan Global</button>
+                </form>
+            </div>
+        </div>
     </div>
-</div>
 
-<div class="card border-0 shadow-sm mb-5">
-    <div class="card-header bg-success bg-opacity-10 text-success fw-bold border-0 py-3">
-        <i class="bi bi-plus-circle me-2"></i>Nieuw Globaal Artikel
-    </div>
-    <div class="card-body bg-light-subtle">
-        <form action="{{ url_for('nieuw_global_item') }}" method="POST" enctype="multipart/form-data" class="row g-3">
-            <div class="col-md-5">
-                <label class="form-label small fw-bold text-uppercase text-muted">Naam</label>
-                <input type="text" name="generieke_naam" class="form-control" placeholder="Bv. M6 Moer RVS" required>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label small fw-bold text-uppercase text-muted">EAN Code</label>
-                <input type="text" name="ean_code" class="form-control" placeholder="Optioneel">
-            </div>
-            <div class="col-md-3">
-                <label class="form-label small fw-bold text-uppercase text-muted">Afbeelding</label>
-                <input type="file" name="afbeelding" class="form-control" accept=".png,.jpg">
-            </div>
-            <div class="col-md-1 d-flex align-items-end">
-                <button type="submit" class="btn btn-success w-100"><i class="bi bi-plus-lg"></i></button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<div class="card border-0 shadow-sm">
-    <div class="card-body p-0">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="bg-light">
-                <tr>
-                    <th class="ps-4">Foto</th>
-                    <th>Naam</th>
-                    <th>EAN</th>
-                    <th class="text-end pe-4">ID</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in items %}
-                <tr>
-                    <td class="ps-4">
-                        {% if item.foto_url %}
-                            <img src="{{ item.foto_url }}" class="rounded shadow-sm" width="40" height="40" style="object-fit: cover;">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">Beschikbare Catalogus Items</div>
+            <div class="card-body p-0">
+                <table class="table table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th>Afbeelding</th>
+                            <th>Naam</th>
+                            <th>Actie</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if catalogus %}
+                            {% for item in catalogus %}
+                            <tr>
+                                <td>
+                                    {% if item.foto_url %}
+                                        <img src="{{ item.foto_url }}" height="40">
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ item.generieke_naam }}</td>
+                                <td>
+                                    <form method="POST" class="d-inline">
+                                        <input type="hidden" name="actie" value="koppel_lokaal">
+                                        <input type="hidden" name="global_id" value="{{ item.global_id }}">
+                                        <button type="submit" class="btn btn-sm btn-primary">
+                                            + Voeg toe aan Assortiment
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
                         {% else %}
-                            <div class="bg-light rounded d-flex align-items-center justify-content-center text-muted border" style="width: 40px; height: 40px;"><i class="bi bi-image"></i></div>
+                            <tr><td colspan="3" class="text-center p-3">Nog geen items in de catalogus.</td></tr>
                         {% endif %}
-                    </td>
-                    <td class="fw-medium">{{ item.generieke_naam }}</td>
-                    <td class="text-muted font-monospace small">{{ item.ean_code or '-' }}</td>
-                    <td class="text-end pe-4 text-muted">#{{ item.global_id }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
