@@ -4,29 +4,20 @@
 <div class="row text-center mt-5">
     <div class="col-12">
         {% if huidig_bedrijf and huidig_bedrijf.logo_url %}
-            <img src="{{ huidig_bedrijf.logo_url }}" alt="Logo" style="max-height: 100px; margin-bottom: 20px;">
+            <!-- Alleen logo tonen -->
+            <img src="{{ huidig_bedrijf.logo_url }}" alt="Logo" style="max-height: 150px; margin-bottom: 30px;">
+        {% else %}
+            <!-- Geen logo: toon titels -->
+            <h1 class="display-4">Vivaldi Voorraad</h1>
+            
+            {% if huidig_bedrijf %}
+                <p class="lead">Welkom bij <strong>{{ huidig_bedrijf.naam }}</strong></p>
+            {% else %}
+                <p class="lead">Selecteer een bedrijf rechtsboven om te starten</p>
+            {% endif %}
         {% endif %}
-        <h1 class="display-4">Vivaldi Voorraad</h1>
         
-        <!-- WELKOM TEKST LOGICA -->
-        {% if huidig_bedrijf and not huidig_bedrijf.logo_url %}
-            <p class="lead">Welkom bij <strong>{{ huidig_bedrijf.naam }}</strong></p>
-        {% elif not huidig_bedrijf %}
-            <p class="lead">Selecteer een bedrijf om te starten</p>
-        {% endif %}
-
-        <!-- Bedrijf Kiezer -->
-        <div class="btn-group mb-5">
-            <button type="button" class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown">
-                <i class="bi bi-building"></i> 
-                {% if huidig_bedrijf %}{{ huidig_bedrijf.naam }}{% else %}Wissel van Bedrijf{% endif %}
-            </button>
-            <ul class="dropdown-menu">
-                {% for b in bedrijven %}
-                <li><a class="dropdown-item" href="{{ url_for('switch_bedrijf', bedrijf_id=b.bedrijf_id) }}">{{ b.naam }}</a></li>
-                {% endfor %}
-            </ul>
-        </div>
+        <div class="mb-5"></div>
     </div>
 </div>
 
@@ -46,7 +37,6 @@
                     <a href="{{ url_for('artikelen_beheer') }}" class="btn btn-outline-primary text-start">
                         <i class="bi bi-box-seam"></i> Mijn Artikelen
                     </a>
-                    <!-- PRINT WACHTRIJ KNOP MET BADGE -->
                     <a href="{{ url_for('assistent_print_queue') }}" class="btn btn-outline-warning text-start position-relative">
                         <i class="bi bi-printer"></i> Print Wachtrij
                         {% if print_queue_count > 0 %}

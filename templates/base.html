@@ -42,15 +42,31 @@
                     </li>
                 </ul>
                 
-                <!-- BEDRIJFS INDICATOR -->
-                <span class="navbar-text text-white fw-bold bg-dark bg-opacity-25 px-3 py-1 rounded-pill">
-                    <i class="bi bi-building"></i> 
-                    {% if huidig_bedrijf %}
-                        {{ huidig_bedrijf.naam }}
-                    {% else %}
-                        Selecteer Bedrijf...
-                    {% endif %}
-                </span>
+                <!-- BEDRIJFS KIEZER (Rechts in navbar) -->
+                <ul class="navbar-nav">
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle fw-bold active" href="#" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-building"></i> 
+                            {% if huidig_bedrijf %}
+                                {{ huidig_bedrijf.naam }}
+                            {% else %}
+                                Kies Bedrijf...
+                            {% endif %}
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end shadow">
+                            {% for b in alle_bedrijven %}
+                                <li>
+                                    <a class="dropdown-item {% if huidig_bedrijf and b.bedrijf_id == huidig_bedrijf.bedrijf_id %}active{% endif %}" 
+                                       href="{{ url_for('switch_bedrijf', bedrijf_id=b.bedrijf_id) }}">
+                                       {{ b.naam }}
+                                    </a>
+                                </li>
+                            {% else %}
+                                <li><span class="dropdown-item text-muted">Geen bedrijven</span></li>
+                            {% endfor %}
+                        </ul>
+                    </li>
+                </ul>
             </div>
         </div>
     </nav>
