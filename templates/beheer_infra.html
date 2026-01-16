@@ -71,9 +71,8 @@
                 <div class="list-group list-group-flush rounded-3 shadow-sm">
                     {% for vestiging in vestigingen %}
                         {% set is_active = (vestiging.vestiging_id == active_vestiging_id) %}
-                        <!-- DIV ipv A als container, zodat buttons apart werken -->
+                        <!-- Robuuste structuur: DIV container met losse A en Buttons -->
                         <div class="list-group-item d-flex justify-content-between align-items-center p-2 {{ 'active' if is_active else '' }}">
-                            <!-- Link voor selectie -->
                             <a href="{{ url_for('beheer_infra', vestiging_id=vestiging.vestiging_id) }}" 
                                class="text-decoration-none flex-grow-1 {{ 'text-white' if is_active else 'text-dark' }}">
                                 <div class="text-truncate">
@@ -82,7 +81,6 @@
                                 </div>
                             </a>
                             
-                            <!-- Actie knoppen -->
                             <div class="d-flex gap-1 ms-2"> 
                                 <button class="btn btn-sm {{ 'btn-light text-primary' if is_active else 'btn-outline-secondary' }} py-0 px-1" 
                                         data-bs-toggle="modal" 
@@ -137,7 +135,9 @@
                              <select name="kopieer_van_ruimte_id" class="form-select form-select-sm border-info bg-light">
                                 <option value="">- Lege -</option>
                                 {% for r in alle_ruimtes %}
-                                    <option value="{{ r.ruimte_id }}">{{ r.nummer }} {{ r.naam }}</option>
+                                    <option value="{{ r.ruimte_id }}">
+                                        {% if r.nummer %}{{ r.nummer }} - {% endif %}{{ r.naam }}
+                                    </option>
                                 {% endfor %}
                             </select>
                         </div>
@@ -150,6 +150,7 @@
                 <div class="list-group list-group-flush rounded-3 shadow-sm">
                     {% for ruimte in ruimtes %}
                         {% set is_active_r = (ruimte.ruimte_id == active_ruimte_id) %}
+                        <!-- Robuuste structuur -->
                         <div class="list-group-item d-flex justify-content-between align-items-center p-2 {{ 'active' if is_active_r else '' }}">
                             <a href="{{ url_for('beheer_infra', vestiging_id=active_vestiging_id, ruimte_id=ruimte.ruimte_id) }}" 
                                class="text-decoration-none flex-grow-1 {{ 'text-white' if is_active_r else 'text-dark' }}">
