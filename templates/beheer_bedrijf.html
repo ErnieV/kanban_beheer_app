@@ -1,11 +1,21 @@
 {% extends "base.html" %}
 
 {% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('dashboard') }}" class="text-decoration-none text-muted fw-medium">
+        <i class="bi bi-arrow-left me-1"></i> Terug naar Dashboard
+    </a>
+</div>
+
 <div class="row justify-content-center">
     <div class="col-md-8">
         <div class="card shadow">
-            <div class="card-header bg-primary text-white">
-                <h4><i class="bi bi-building"></i> Bedrijfsgegevens</h4>
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h4 class="my-0"><i class="bi bi-building"></i> Bedrijfsgegevens</h4>
+                <!-- Nieuwe knop voor extra bedrijven -->
+                <button class="btn btn-sm btn-light text-primary fw-bold" data-bs-toggle="modal" data-bs-target="#nieuwBedrijfModal">
+                    <i class="bi bi-plus-circle"></i> Nieuw Bedrijf
+                </button>
             </div>
             <div class="card-body">
                 <form method="POST" enctype="multipart/form-data">
@@ -35,10 +45,36 @@
 
                     <div class="d-grid gap-2">
                         <button type="submit" class="btn btn-success">Wijzigingen Opslaan</button>
-                        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">Annuleren</a>
                     </div>
                 </form>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL VOOR NIEUW BEDRIJF (Verplaatst vanuit Dashboard) -->
+<div class="modal fade" id="nieuwBedrijfModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form action="{{ url_for('nieuw_bedrijf') }}" method="POST">
+                <div class="modal-header">
+                    <h5 class="modal-title">Nieuw Bedrijf Aanmaken</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info small">
+                        <i class="bi bi-info-circle"></i> Je maakt een volledig nieuwe omgeving aan. Je wordt hierna direct ingelogd in het nieuwe bedrijf.
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Naam van de praktijk / instelling</label>
+                        <input type="text" name="naam" class="form-control" required placeholder="Bijv. Huisartsenpraktijk Oost">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuleren</button>
+                    <button type="submit" class="btn btn-success">Aanmaken</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>

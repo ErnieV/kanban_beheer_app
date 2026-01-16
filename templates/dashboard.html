@@ -8,16 +8,18 @@
         {% endif %}
         <h1 class="display-4">Vivaldi Voorraad</h1>
         
-        {% if huidig_bedrijf %}
+        <!-- WELKOM TEKST LOGICA -->
+        {% if huidig_bedrijf and not huidig_bedrijf.logo_url %}
             <p class="lead">Welkom bij <strong>{{ huidig_bedrijf.naam }}</strong></p>
-        {% else %}
+        {% elif not huidig_bedrijf %}
             <p class="lead">Selecteer een bedrijf om te starten</p>
         {% endif %}
 
         <!-- Bedrijf Kiezer -->
         <div class="btn-group mb-5">
             <button type="button" class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown">
-                <i class="bi bi-building"></i> Wissel van Bedrijf
+                <i class="bi bi-building"></i> 
+                {% if huidig_bedrijf %}{{ huidig_bedrijf.naam }}{% else %}Wissel van Bedrijf{% endif %}
             </button>
             <ul class="dropdown-menu">
                 {% for b in bedrijven %}
@@ -38,12 +40,21 @@
             <div class="card-body">
                 <p>Beheer de voorraad in de kamers en je eigen assortiment.</p>
                 <div class="d-grid gap-2">
-                    <!-- AANGEPAST: Stijl consistent met rechterkant, maar wel primary voor de hoofdactie -->
                     <a href="{{ url_for('assistent_kamers') }}" class="btn btn-outline-primary text-start">
                         <i class="bi bi-door-open-fill"></i> Naar mijn Kamers
                     </a>
                     <a href="{{ url_for('artikelen_beheer') }}" class="btn btn-outline-primary text-start">
                         <i class="bi bi-box-seam"></i> Mijn Artikelen
+                    </a>
+                    <!-- PRINT WACHTRIJ KNOP MET BADGE -->
+                    <a href="{{ url_for('assistent_print_queue') }}" class="btn btn-outline-warning text-start position-relative">
+                        <i class="bi bi-printer"></i> Print Wachtrij
+                        {% if print_queue_count > 0 %}
+                            <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
+                                {{ print_queue_count }}
+                                <span class="visually-hidden">openstaande printopdrachten</span>
+                            </span>
+                        {% endif %}
                     </a>
                 </div>
             </div>

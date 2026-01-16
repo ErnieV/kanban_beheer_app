@@ -115,13 +115,54 @@ def upload_image_to_azure(file):
 @app.route('/')
 def dashboard():
     if not check_db(): return render_template('dashboard.html', bedrijven=[])
+    
+    # 1. Alle bedrijven voor de selector
     alle_bedrijven = db.session.query(Bedrijf).all()
-    return render_template('dashboard.html', bedrijven=alle_bedrijven)
+    
+    # 2. Count voor print wachtrij (alleen voor huidig bedrijf)
+    print_queue_count = 0
+    huidig_id = get_huidig_bedrijf_id()
+    if huidig_id:
+        try:
+            print_queue_count = db.session.query(Print_Queue).filter_by(
+                bedrijf_id=huidig_id, 
+                status='PENDING'
+            ).count()
+        except Exception:
+            print_queue_count = 0 # Fallback bij db error
+
+    return render_template('dashboard.html', 
+                           bedrijven=alle_bedrijven, 
+                           print_queue_count=print_queue_count)
 
 @app.route('/switch-bedrijf/<int:bedrijf_id>')
 def switch_bedrijf(bedrijf_id):
     session['bedrijf_id'] = bedrijf_id
     flash('Bedrijf gewijzigd.', 'info')
+    return redirect(url_for('dashboard'))
+
+@app.route('/bedrijf/nieuw', methods=['POST'])
+def nieuw_bedrijf():
+    if not check_db(): return redirect(url_for('dashboard'))
+    
+    naam = request.form.get('naam')
+    if naam:
+        try:
+            # Nieuw bedrijf aanmaken
+            nieuw = Bedrijf(naam=naam)
+            db.session.add(nieuw)
+            db.session.commit()
+            
+            # Direct inloggen op dit nieuwe bedrijf
+            session['bedrijf_id'] = nieuw.bedrijf_id
+            flash(f'Bedrijf "{naam}" aangemaakt en geselecteerd. Welkom!', 'success')
+        except IntegrityError:
+            db.session.rollback()
+            flash('Een bedrijf met deze naam bestaat al.', 'warning')
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Fout bij aanmaken: {e}', 'danger')
+            
     return redirect(url_for('dashboard'))
 
 # =========================================================
@@ -202,11 +243,9 @@ def add_to_kast_from_room(kast_id):
     kast = db.session.query(Kast).get(kast_id)
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
-# --- NIEUW: KANBAN AANVRAGEN (PLATTE DATA) ---
+# --- KANBAN AANVRAGEN ---
 
 def create_queue_item(pos, art, kast, ruimte, r_type, bedrijf):
-    """Maakt een Print_Queue object met platte data."""
-    # Header tekst
     header_text = ruimte.naam.upper()
     if ruimte.nummer: header_text = f"{ruimte.nummer} {header_text}"
     
@@ -215,29 +254,23 @@ def create_queue_item(pos, art, kast, ruimte, r_type, bedrijf):
         status='PENDING',
         printer_id="reception-badgy-01",
         card_type="KANBAN_TWO_BIN",
-        
         header_text=header_text,
         header_color=r_type.kleur_hex if r_type else "#3B82F6",
-        
         product_name=art.eigen_naam,
         product_packaging=art.verpakkingseenheid_tekst or "Stuk",
         product_sku=str(art.lokaal_artikel_id),
         product_image_url=pos.locatie_foto_url or art.foto_url,
-        
         location_text=f"{kast.naam} ({kast.type_opslag})",
         min_level=pos.trigger_min,
         max_level=pos.target_max,
-        
         qr_code_value=pos.qr_code or "NO_QR",
         qr_human_readable=f"POS-{pos.voorraad_positie_id}",
-        
         company_logo_url=bedrijf.logo_url
     )
 
 @app.route('/assistent/kanban/aanvragen/enkel/<int:voorraad_positie_id>', methods=['POST'])
 def kanban_aanvragen_enkel(voorraad_positie_id):
     try:
-        # Haal alle benodigde data op via joins
         result = db.session.query(Voorraad_Positie, Lokaal_Artikel, Kast, Ruimte, Ruimte_Type, Bedrijf)\
             .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
             .join(Kast, Voorraad_Positie.kast_id == Kast.kast_id)\
@@ -521,6 +554,11 @@ def beheer_infra():
 
 @app.route('/beheer/verwijder/<type>/<int:id>', methods=['POST'])
 def verwijder_item(type, id):
+    redirect_url = url_for('beheer_infra')
+    vestiging_id = request.args.get('vestiging_id')
+    ruimte_id = request.args.get('ruimte_id')
+    if vestiging_id: redirect_url = url_for('beheer_infra', vestiging_id=vestiging_id, ruimte_id=ruimte_id)
+
     try:
         item = None
         if type == 'artikel':
@@ -537,16 +575,43 @@ def verwijder_item(type, id):
         if item:
             db.session.delete(item)
             db.session.commit()
-            flash('Verwijderd.', 'success')
+            flash(f'{type.capitalize()} verwijderd.', 'success')
     except Exception as e:
         db.session.rollback()
-        flash(f'Kan niet verwijderen: {e}', 'danger')
-    return redirect(request.referrer or url_for('dashboard'))
+        flash(f'Fout: {e}', 'danger')
+    return redirect(redirect_url)
 
 @app.route('/beheer/update/<type>/<int:id>', methods=['POST'])
 def update_item(type, id):
-    # Generieke update functie, zoals eerder
-    return redirect(request.referrer or url_for('dashboard'))
+    redirect_url = url_for('beheer_infra')
+    if 'vestiging_id' in request.form: redirect_url = url_for('beheer_infra', vestiging_id=request.form.get('vestiging_id'))
+
+    try:
+        if type == 'vestiging':
+            item = db.session.query(Vestiging).get(id)
+            item.naam = request.form.get('naam')
+            item.adres = request.form.get('adres')
+        elif type == 'ruimte':
+            item = db.session.query(Ruimte).get(id)
+            item.naam = request.form.get('naam')
+            item.nummer = request.form.get('nummer')
+            item.ruimte_type_id = request.form.get('ruimte_type_id')
+        elif type == 'kast':
+            item = db.session.query(Kast).get(id)
+            item.naam = request.form.get('naam')
+            item.type_opslag = request.form.get('type_opslag')
+        db.session.commit()
+        flash('Item bijgewerkt.', 'success')
+    except IntegrityError as e:
+        db.session.rollback()
+        if "CHK_Kast_Type" in str(e):
+            flash("Fout: Ongeldig type opslag. Kies 'Grijpvoorraad' of 'Bulkvoorraad'.", 'danger')
+        else:
+            flash(f"Database fout: {e.orig}", 'danger')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Fout: {e}', 'danger')
+    return redirect(redirect_url)
 
 if __name__ == '__main__':
     app.run(debug=True)
