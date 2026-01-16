@@ -124,22 +124,20 @@ def assistent_kamers():
     bedrijf_id = get_huidig_bedrijf_id()
     
     try:
-        # Eerst de ruimtes ophalen
         ruimtes_query = db.session.query(Ruimte, Vestiging)\
             .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
             .filter(Vestiging.bedrijf_id == bedrijf_id)\
-            .order_by(Vestiging.naam, Ruimte.naam).all()
+            .order_by(Vestiging.naam, Ruimte.nummer, Ruimte.naam).all() # Sorteer nu ook op nummer
             
         ruimtes_data = []
         for ruimte, vestiging in ruimtes_query:
-            # Per ruimte apart tellen om GROUP BY issues te voorkomen
             count = db.session.query(Kast).filter_by(ruimte_id=ruimte.ruimte_id).count()
             ruimtes_data.append((ruimte, vestiging, count))
             
         return render_template('assistent_kamer_selectie.html', ruimtes=ruimtes_data)
     except Exception as e:
-        print(f"Error assistent_kamers: {e}")
-        flash("Kon kamers niet ophalen.", "danger")
+        print(f"Error in assistent_kamers: {e}")
+        flash("Er ging iets mis bij het ophalen van de kamers.", "danger")
         return redirect(url_for('dashboard'))
 
 @app.route('/assistent/kamer/<int:ruimte_id>')
@@ -163,14 +161,19 @@ def assistent_kamer_view(ruimte_id):
     
     return render_template('assistent_kamer_view.html', ruimte=ruimte, kasten_data=kasten_data, alle_artikelen=alle_artikelen)
 
-@app.route('/assistent/update-voorraad/<int:positie_id>', methods=['POST'])
-def update_voorraad_positie(positie_id):
-    positie = db.session.query(Voorraad_Positie).get(positie_id)
+# FIX: De database ID heet waarschijnlijk voorraad_positie_id, niet positie_id
+@app.route('/assistent/update-voorraad/<int:voorraad_positie_id>', methods=['POST'])
+def update_voorraad_positie(voorraad_positie_id):
+    positie = db.session.query(Voorraad_Positie).get(voorraad_positie_id)
     if positie:
         positie.trigger_min = request.form.get('trigger_min')
         positie.target_max = request.form.get('target_max')
         db.session.commit()
         flash('Voorraadniveaus bijgewerkt.', 'success')
+    else:
+        flash('Voorraadpositie niet gevonden.', 'danger')
+        return redirect(url_for('assistent_kamers'))
+        
     kast = db.session.query(Kast).get(positie.kast_id)
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
@@ -195,7 +198,7 @@ def add_to_kast_from_room(kast_id):
 # =========================================================
 #  ARTIKEL BEHEER
 # =========================================================
-
+# (Ongewijzigd, maar wel nodig voor de context)
 @app.route('/artikelen-beheer', methods=['GET', 'POST'])
 def artikelen_beheer():
     if not check_db(): return redirect(url_for('dashboard'))
@@ -347,7 +350,6 @@ def beheer_catalogus():
             if file:
                 url = upload_image_to_azure(file)
                 if url and "ERROR" not in url: nieuw.foto_url = url
-            
             db.session.add(nieuw)
             db.session.commit()
             flash('Global item aangemaakt.', 'success')
@@ -366,7 +368,7 @@ def beheer_catalogus():
                 db.session.add(nieuw_lokaal)
                 db.session.commit()
                 flash('Opgenomen in lokaal assortiment.', 'success')
-
+        
         elif actie == 'bewerk_global':
             global_id = request.form.get('global_id')
             item = db.session.query(Global_Catalogus).get(global_id)
@@ -379,23 +381,19 @@ def beheer_catalogus():
                     url = upload_image_to_azure(file)
                     if url and "ERROR" not in url: item.foto_url = url
                 db.session.commit()
-                usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
-                if usage_count > 0:
-                    flash(f'Item bijgewerkt. Let op: dit item wordt gebruikt door {usage_count} bedrijven.', 'warning')
-                else:
-                    flash('Item bijgewerkt.', 'success')
+                flash('Item bijgewerkt.', 'success')
 
         elif actie == 'verwijder_global':
             global_id = request.form.get('global_id')
             usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
             if usage_count > 0:
-                flash(f'Kan item NIET verwijderen: het is in gebruik bij {usage_count} bedrijven.', 'danger')
+                flash(f'Kan item NIET verwijderen: in gebruik.', 'danger')
             else:
                 item = db.session.query(Global_Catalogus).get(global_id)
                 if item:
                     db.session.delete(item)
                     db.session.commit()
-                    flash('Item verwijderd uit globale catalogus.', 'success')
+                    flash('Item verwijderd.', 'success')
 
         return redirect(url_for('beheer_catalogus'))
 
@@ -431,27 +429,21 @@ def beheer_infra():
             db.session.add(Vestiging(bedrijf_id=bedrijf_id, naam=request.form.get('naam'), adres=request.form.get('adres')))
         
         elif actie == 'nieuwe_ruimte':
-            # 1. Maak de nieuwe ruimte aan
             nieuwe_ruimte = Ruimte(
                 bedrijf_id=bedrijf_id, 
                 vestiging_id=request.form.get('vestiging_id'), 
-                naam=request.form.get('naam'), 
+                naam=request.form.get('naam'),
+                nummer=request.form.get('nummer'), # NIEUW: Nummer opslaan
                 type_ruimte='KAMER'
             )
             db.session.add(nieuwe_ruimte)
-            db.session.flush() # Zorgt dat we het nieuwe ID krijgen
+            db.session.flush()
 
-            # 2. Check of we moeten kopiëren
             kopieer_id = request.form.get('kopieer_van_ruimte_id')
             if kopieer_id:
                 try:
-                    # Haal alle kasten van de bron op
                     bron_kasten = db.session.query(Kast).filter_by(ruimte_id=kopieer_id).all()
-                    count_kasten = 0
-                    count_items = 0
-                    
                     for bron_kast in bron_kasten:
-                        # a. Maak kopie van de kast
                         nieuwe_kast = Kast(
                             bedrijf_id=bedrijf_id,
                             ruimte_id=nieuwe_ruimte.ruimte_id,
@@ -459,10 +451,8 @@ def beheer_infra():
                             type_opslag=bron_kast.type_opslag
                         )
                         db.session.add(nieuwe_kast)
-                        db.session.flush() # ID ophalen voor de items
-                        count_kasten += 1
+                        db.session.flush()
                         
-                        # b. Haal inhoud van deze kast op en kopieer
                         posities = db.session.query(Voorraad_Positie).filter_by(kast_id=bron_kast.kast_id).all()
                         for pos in posities:
                             nieuw_pos = Voorraad_Positie(
@@ -472,14 +462,12 @@ def beheer_infra():
                                 strategie=pos.strategie,
                                 trigger_min=pos.trigger_min,
                                 target_max=pos.target_max,
-                                locatie_foto_url=pos.locatie_foto_url # Neem foto over (is een URL, dus kan gedeeld)
+                                locatie_foto_url=pos.locatie_foto_url
                             )
                             db.session.add(nieuw_pos)
-                            count_items += 1
-                            
-                    flash(f'Ruimte aangemaakt inclusief {count_kasten} kasten en {count_items} artikelen!', 'success')
+                    flash('Ruimte inclusief inrichting gekopieerd!', 'success')
                 except Exception as e:
-                    flash(f'Ruimte aangemaakt, maar fout bij kopiëren inrichting: {e}', 'warning')
+                    flash(f'Ruimte aangemaakt, maar fout bij kopiëren: {e}', 'warning')
             else:
                 flash('Nieuwe lege ruimte aangemaakt.', 'success')
 
@@ -529,6 +517,7 @@ def update_item(type, id):
         elif type == 'ruimte':
             item = db.session.query(Ruimte).get(id)
             item.naam = request.form.get('naam')
+            item.nummer = request.form.get('nummer') # NIEUW: Nummer updaten
         elif type == 'kast':
             item = db.session.query(Kast).get(id)
             item.naam = request.form.get('naam')

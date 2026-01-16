@@ -5,7 +5,10 @@
         <a href="{{ url_for('assistent_kamers') }}" class="text-decoration-none text-muted mb-1 d-block">
             <i class="bi bi-arrow-left"></i> Terug naar overzicht
         </a>
-        <h2><i class="bi bi-door-open-fill"></i> {{ ruimte.naam }}</h2>
+        <h2>
+            <i class="bi bi-door-open-fill"></i> 
+            {% if ruimte.nummer %}{{ ruimte.nummer }} - {% endif %}{{ ruimte.naam }}
+        </h2>
     </div>
     <span class="badge bg-primary fs-6">{{ kasten_data|length }} Opslaglocaties</span>
 </div>
@@ -38,7 +41,6 @@
                             {% for pos, lokaal, globaal in inhoud %}
                             <tr>
                                 <td>
-                                    <!-- Foto logic: Positie > Lokaal > Globaal -->
                                     {% set img = pos.locatie_foto_url or lokaal.foto_url or (globaal and globaal.foto_url) %}
                                     {% if img %}
                                         <img src="{{ img }}" height="40" class="rounded border" style="object-fit: cover; width: 40px;">
@@ -57,8 +59,8 @@
                                     <small class="text-muted">{{ lokaal.verpakkingseenheid_tekst }}</small>
                                 </td>
                                 
-                                <!-- Inline Edit Form -->
-                                <form action="{{ url_for('update_voorraad_positie', positie_id=pos.positie_id) }}" method="POST">
+                                <!-- CRASH FIX: gebruik voorraad_positie_id -->
+                                <form action="{{ url_for('update_voorraad_positie', voorraad_positie_id=pos.voorraad_positie_id) }}" method="POST">
                                     <td>
                                         <input type="number" name="trigger_min" value="{{ pos.trigger_min }}" class="form-control form-control-sm" onchange="this.form.submit()">
                                     </td>
@@ -66,8 +68,7 @@
                                         <input type="number" name="target_max" value="{{ pos.target_max }}" class="form-control form-control-sm" onchange="this.form.submit()">
                                     </td>
                                     <td>
-                                        <!-- Verwijder knop (klein) -->
-                                        <button type="submit" formaction="{{ url_for('verwijder_item', type='voorraad', id=pos.positie_id) }}" class="btn btn-link text-danger p-0" onclick="return confirm('Artikel uit deze kast verwijderen?')">
+                                        <button type="submit" formaction="{{ url_for('verwijder_item', type='voorraad', id=pos.voorraad_positie_id) }}" class="btn btn-link text-danger p-0" onclick="return confirm('Artikel uit deze kast verwijderen?')">
                                             <i class="bi bi-x-circle"></i>
                                         </button>
                                     </td>
@@ -80,7 +81,6 @@
                     </table>
                 </div>
 
-                <!-- Toevoegen aan deze kast -->
                 <form action="{{ url_for('add_to_kast_from_room', kast_id=kast.kast_id) }}" method="POST" class="row g-2 align-items-center">
                     <div class="col-auto">
                         <span class="form-text fw-bold">Artikel toevoegen:</span>

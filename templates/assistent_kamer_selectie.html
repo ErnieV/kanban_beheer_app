@@ -14,7 +14,9 @@
     <div class="col-md-4 mb-3">
         <div class="card h-100 shadow-sm hover-shadow border-start border-4 border-primary">
             <div class="card-body">
-                <h5 class="card-title">{{ ruimte.naam }}</h5>
+                <h5 class="card-title">
+                    {% if ruimte.nummer %}{{ ruimte.nummer }} - {% endif %}{{ ruimte.naam }}
+                </h5>
                 <h6 class="card-subtitle mb-2 text-muted">{{ vestiging.naam }}</h6>
                 <p class="card-text text-muted small">Bevat {{ count }} kasten/karren.</p>
                 
@@ -23,7 +25,9 @@
         </div>
     </div>
     {% else %}
-    <div class="alert alert-info">Nog geen kamers ingericht. Vraag de beheerder om dit te doen.</div>
+    <div class="col-12">
+        <div class="alert alert-info">Nog geen kamers ingericht. Vraag de beheerder om dit te doen.</div>
+    </div>
     {% endfor %}
 </div>
 {% endblock %}
