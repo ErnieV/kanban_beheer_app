@@ -45,14 +45,30 @@ with app.app_context():
         Base.prepare(db.engine, reflect=True)
         
         # Tabellen laden en beschikbaar maken als classes
-        Global_Catalogus = Base.classes.Global_Catalogus
-        Lokaal_Artikel = Base.classes.Lokaal_Artikel
-        Voorraad_Positie = Base.classes.Voorraad_Positie
-        Bedrijf = Base.classes.Bedrijf
-        Vestiging = Base.classes.Vestiging
-        Ruimte = Base.classes.Ruimte
-        Kast = Base.classes.Kast
-        Leverancier = Base.classes.Leverancier
+        # Gebruik try-except per tabel voor robuustheid als tabelnamen afwijken
+        try: Global_Catalogus = Base.classes.Global_Catalogus
+        except AttributeError: Global_Catalogus = None
+        
+        try: Lokaal_Artikel = Base.classes.Lokaal_Artikel
+        except AttributeError: Lokaal_Artikel = None
+
+        try: Voorraad_Positie = Base.classes.Voorraad_Positie
+        except AttributeError: Voorraad_Positie = None
+
+        try: Bedrijf = Base.classes.Bedrijf
+        except AttributeError: Bedrijf = None
+
+        try: Vestiging = Base.classes.Vestiging
+        except AttributeError: Vestiging = None
+
+        try: Ruimte = Base.classes.Ruimte
+        except AttributeError: Ruimte = None
+
+        try: Kast = Base.classes.Kast
+        except AttributeError: Kast = None
+
+        try: Leverancier = Base.classes.Leverancier
+        except AttributeError: Leverancier = None
         
         print("Database succesvol verbonden en tabellen geladen.")
     except Exception as e:
@@ -220,7 +236,7 @@ def kast_inhoud(kast_id):
     alle_artikelen = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=huidig_bedrijf_id).order_by(Lokaal_Artikel.eigen_naam).all()
     return render_template('kast_inhoud.html', kast=gekozen_kast, inhoud=inhoud, artikelen=alle_artikelen)
 
-# === BEHEER PORTAAL (Toegevoegd om functionaliteit te behouden) ===
+# === BEHEER PORTAAL ===
 
 @app.route('/beheer')
 def beheer_index():
