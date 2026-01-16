@@ -17,10 +17,10 @@
             <table class="table table-bordered table-striped table-hover align-middle mb-0" style="font-size: 0.9rem;">
                 <thead class="table-light">
                     <tr>
-                        <th style="width: 15%;">Header Info</th>
-                        <th style="width: 20%;">Artikel Details</th>
-                        <th style="width: 15%;">Logistiek</th>
-                        <th style="width: 25%;">QR & Codes</th>
+                        <th style="width: 20%;">Locatie & Header</th>
+                        <th style="width: 25%;">Artikel</th>
+                        <th style="width: 10%;">Logistiek</th>
+                        <th style="width: 15%;" class="text-center">QR Code</th>
                         <th style="width: 10%;">Status</th>
                         <th style="width: 100px;" class="text-end">Acties</th>
                     </tr>
@@ -28,45 +28,61 @@
                 <tbody>
                     {% for item in queue_items %}
                     <tr>
-                        <!-- HEADER INFO -->
+                        <!-- HEADER INFO & LOGO -->
                         <td>
-                            <div class="d-flex align-items-center mb-1">
-                                <span class="border rounded me-2 shadow-sm" style="width: 24px; height: 24px; background-color: {{ item.header_color|default('#ccc') }};"></span>
-                                <span class="text-monospace small">{{ item.header_color }}</span>
+                            <!-- Header Preview -->
+                            <div class="p-2 mb-2 text-center text-white fw-bold text-uppercase rounded shadow-sm" 
+                                 style="background-color: {{ item.header_color|default('#333') }}; font-size: 0.85rem;">
+                                {{ item.header_text }}
                             </div>
-                            <div class="fw-bold text-uppercase small">{{ item.header_text }}</div>
+                            
+                            <!-- Bedrijfslogo -->
+                            {% if item.company_logo_url %}
+                                <div class="text-center">
+                                    <img src="{{ item.company_logo_url }}" alt="Logo" style="max-height: 25px; opacity: 0.8;">
+                                </div>
+                            {% endif %}
+                            <div class="text-muted small text-center mt-1">{{ item.location_text }}</div>
                         </td>
 
                         <!-- ARTIKEL -->
                         <td>
-                            <strong>{{ item.product_name }}</strong><br>
-                            <span class="text-muted">{{ item.product_packaging }}</span><br>
-                            <small class="text-dark">SKU: <span class="font-monospace">{{ item.product_sku }}</span></small>
-                            <br>
-                            {% if item.product_image_url %}
-                                <a href="{{ item.product_image_url }}" target="_blank" class="small text-decoration-none text-success">
-                                    <i class="bi bi-image"></i> Foto aanwezig
-                                </a>
-                            {% else %}
-                                <span class="small text-muted text-decoration-line-through"><i class="bi bi-image"></i> Geen foto</span>
-                            {% endif %}
+                            <div class="d-flex">
+                                <!-- Product Foto -->
+                                <div class="me-3 flex-shrink-0">
+                                    {% if item.product_image_url %}
+                                        <img src="{{ item.product_image_url }}" class="rounded border bg-white" style="width: 50px; height: 50px; object-fit: contain;">
+                                    {% else %}
+                                        <div class="rounded border bg-light d-flex align-items-center justify-content-center text-muted" style="width: 50px; height: 50px;">
+                                            <i class="bi bi-box-seam"></i>
+                                        </div>
+                                    {% endif %}
+                                </div>
+                                <div>
+                                    <strong>{{ item.product_name }}</strong><br>
+                                    <span class="text-muted">{{ item.product_packaging }}</span><br>
+                                    <small class="text-dark font-monospace">{{ item.product_sku }}</small>
+                                </div>
+                            </div>
                         </td>
 
                         <!-- LOGISTIEK -->
                         <td>
-                            <div>{{ item.location_text }}</div>
-                            <div class="mt-1">
-                                <span class="badge bg-light text-dark border me-1">Min: {{ item.min_level }}</span>
+                            <div class="d-flex flex-column gap-1">
+                                <span class="badge bg-light text-dark border">Min: {{ item.min_level }}</span>
                                 <span class="badge bg-light text-dark border">Max: {{ item.max_level }}</span>
                             </div>
                         </td>
 
-                        <!-- CODES -->
-                        <td>
-                            <div class="font-monospace small text-break bg-light p-1 rounded mb-1" style="font-size: 0.75rem;">
-                                {{ item.qr_code_value }}
-                            </div>
-                            <small class="text-muted">Tekst: <strong>{{ item.qr_human_readable }}</strong></small>
+                        <!-- QR CODE PREVIEW -->
+                        <td class="text-center bg-white">
+                            {% if item.qr_code_value and 'http' in item.qr_code_value %}
+                                <img src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&data={{ item.qr_code_value }}" 
+                                     alt="QR" class="img-fluid" style="width: 60px; height: 60px;">
+                            {% else %}
+                                <i class="bi bi-qr-code text-muted" style="font-size: 2rem;"></i>
+                            {% endif %}
+                            <div class="font-monospace fw-bold small mt-1" style="font-size: 0.7rem;">{{ item.qr_human_readable }}</div>
                         </td>
 
                         <!-- STATUS -->
@@ -81,7 +97,7 @@
 
                         <!-- ACTIES -->
                         <td class="text-end">
-                            <div class="btn-group-vertical btn-group-sm">
+                            <div class="btn-group-vertical btn-group-sm w-100">
                                 <!-- DETAILS KNOP (Voorbeeld) -->
                                 <button type="button" class="btn btn-outline-info mb-1" 
                                         title="Bekijk voorbeeld"
@@ -133,34 +149,47 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body d-flex justify-content-center bg-light">
-                <!-- PREVIEW VAN HET KAARTJE -->
-                <div class="card shadow-sm bg-white" style="width: 280px; border: 1px solid #999;">
-                    <!-- Header Simulatie -->
-                    <div id="modalHeader" class="text-white fw-bold text-center py-2 text-uppercase" style="background-color: #333; font-size: 1.1rem;">
-                        HEADER TEXT
+                <!-- PREVIEW VAN HET KAARTJE (Badgy Formaat) -->
+                <div class="card shadow-sm bg-white position-relative" style="width: 250px; height: 390px; border: 1px solid #999;">
+                    <!-- Header -->
+                    <div id="modalHeader" class="text-white fw-bold text-center py-3 text-uppercase align-middle d-flex align-items-center justify-content-center" 
+                         style="background-color: #333; font-size: 1.1rem; height: 60px;">
+                        HEADER
                     </div>
-                    <div class="card-body text-center p-3">
-                        <h5 class="card-title fw-bold mb-0" id="modalProduct" style="font-size: 1.25rem;">Product Naam</h5>
-                        <p class="text-muted mb-2" id="modalPackaging" style="font-size: 0.9rem;">Verpakking</p>
+                    
+                    <div class="card-body text-center p-3 d-flex flex-column h-100">
+                        <!-- Product -->
+                        <div class="mb-2">
+                            <h5 class="card-title fw-bold mb-0 text-truncate" id="modalProduct" style="font-size: 1.2rem;">Product</h5>
+                            <small class="text-muted" id="modalPackaging">Verpakking</small>
+                        </div>
                         
-                        <!-- Placeholder voor plaatje -->
-                        <div class="d-flex align-items-center justify-content-center mx-auto mb-2" style="width: 120px; height: 120px;">
-                            <img id="modalImg" src="" alt="Artikel" style="max-width: 100%; max-height: 100%; display: none;">
-                            <i id="modalNoImg" class="bi bi-box-seam text-secondary" style="font-size: 4rem; opacity: 0.3;"></i>
+                        <!-- Plaatje -->
+                        <div class="flex-grow-1 d-flex align-items-center justify-content-center mb-2" style="max-height: 120px;">
+                            <img id="modalImg" src="" alt="Artikel" style="max-width: 100%; max-height: 100px; display: none;">
+                            <i id="modalNoImg" class="bi bi-box-seam text-secondary" style="font-size: 3rem; opacity: 0.2;"></i>
                         </div>
 
-                        <!-- Logistics Bar -->
-                        <div class="row g-0 border-top border-bottom py-1 mb-2 bg-light" style="font-size: 0.85rem;">
-                            <div class="col-4 border-end"><strong>MIN</strong><br><span id="modalMin" class="fs-6">1</span></div>
-                            <div class="col-4 border-end"><strong>MAX</strong><br><span id="modalMax" class="fs-6">5</span></div>
-                            <div class="col-4"><div class="text-truncate px-1 pt-2 fw-bold" id="modalLocation">KAST</div></div>
+                        <!-- Info Bar -->
+                        <div class="row g-0 border-top border-bottom py-1 mb-3 bg-light text-dark" style="font-size: 0.8rem;">
+                            <div class="col-4 border-end pt-1">
+                                <div class="fw-bold">MIN</div>
+                                <div id="modalMin" class="fs-5">1</div>
+                            </div>
+                            <div class="col-4 border-end pt-1">
+                                <div class="fw-bold">MAX</div>
+                                <div id="modalMax" class="fs-5">5</div>
+                            </div>
+                            <div class="col-4 d-flex align-items-center justify-content-center px-1">
+                                <div id="modalLocation" class="fw-bold text-break" style="line-height: 1.1;">LOC</div>
+                            </div>
                         </div>
 
-                        <!-- QR Simulatie -->
-                        <div class="mb-1">
-                            <i class="bi bi-qr-code-scan" style="font-size: 3rem;"></i>
+                        <!-- QR Footer -->
+                        <div class="mt-auto">
+                            <img id="modalQrImg" src="" alt="QR" style="width: 60px; height: 60px;">
+                            <div class="font-monospace fw-bold mt-1" id="modalHuman" style="font-size: 0.8rem;">CODE</div>
                         </div>
-                        <div class="font-monospace fw-bold" id="modalHuman" style="font-size: 0.9rem;">CODE</div>
                     </div>
                 </div>
             </div>
@@ -176,14 +205,15 @@
         // Haal data op uit attributen
         const d = button.dataset;
 
-        // Vul Visuele Preview
+        // Vul Header
         const headerEl = document.getElementById('modalHeader');
         headerEl.textContent = d.header;
         headerEl.style.backgroundColor = d.color || '#333';
 
+        // Vul Product Data
         document.getElementById('modalProduct').textContent = d.product;
         document.getElementById('modalPackaging').textContent = d.packaging;
-        document.getElementById('modalLocation').textContent = d.location;
+        document.getElementById('modalLocation').textContent = d.location.split('(')[0]; // Alleen kastnaam
         document.getElementById('modalMin').textContent = d.min;
         document.getElementById('modalMax').textContent = d.max;
         document.getElementById('modalHuman').textContent = d.human;
@@ -192,7 +222,6 @@
         const imgEl = document.getElementById('modalImg');
         const noImgEl = document.getElementById('modalNoImg');
         
-        // Simpele check of URL geldig lijkt
         if (d.img && d.img !== 'None' && d.img.length > 5) {
             imgEl.src = d.img;
             imgEl.style.display = 'inline-block';
@@ -200,6 +229,15 @@
         } else {
             imgEl.style.display = 'none';
             noImgEl.style.display = 'inline-block';
+        }
+
+        // QR Code Generatie voor Modal
+        const qrEl = document.getElementById('modalQrImg');
+        if (d.qr && d.qr.includes('http')) {
+             qrEl.src = "https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=" + encodeURIComponent(d.qr);
+             qrEl.style.display = 'inline-block';
+        } else {
+             qrEl.style.display = 'none';
         }
 
         // Toon Modal
