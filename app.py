@@ -123,14 +123,24 @@ def assistent_kamers():
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
     
-    ruimtes = db.session.query(Ruimte, Vestiging, func.count(Kast.kast_id).label('kast_count'))\
-        .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
-        .outerjoin(Kast, Ruimte.ruimte_id == Kast.ruimte_id)\
-        .filter(Vestiging.bedrijf_id == bedrijf_id)\
-        .group_by(Ruimte.ruimte_id, Ruimte.naam, Ruimte.type_ruimte, Vestiging.naam)\
-        .order_by(Vestiging.naam, Ruimte.naam).all()
-        
-    return render_template('assistent_kamer_selectie.html', ruimtes=ruimtes)
+    try:
+        # Eerst de ruimtes ophalen
+        ruimtes_query = db.session.query(Ruimte, Vestiging)\
+            .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
+            .filter(Vestiging.bedrijf_id == bedrijf_id)\
+            .order_by(Vestiging.naam, Ruimte.naam).all()
+            
+        ruimtes_data = []
+        for ruimte, vestiging in ruimtes_query:
+            # Per ruimte apart tellen om GROUP BY issues te voorkomen
+            count = db.session.query(Kast).filter_by(ruimte_id=ruimte.ruimte_id).count()
+            ruimtes_data.append((ruimte, vestiging, count))
+            
+        return render_template('assistent_kamer_selectie.html', ruimtes=ruimtes_data)
+    except Exception as e:
+        print(f"Error assistent_kamers: {e}")
+        flash("Kon kamers niet ophalen.", "danger")
+        return redirect(url_for('dashboard'))
 
 @app.route('/assistent/kamer/<int:ruimte_id>')
 def assistent_kamer_view(ruimte_id):
@@ -183,7 +193,7 @@ def add_to_kast_from_room(kast_id):
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
 # =========================================================
-#  ARTIKEL BEHEER (Centraal)
+#  ARTIKEL BEHEER
 # =========================================================
 
 @app.route('/artikelen-beheer', methods=['GET', 'POST'])
@@ -194,7 +204,6 @@ def artikelen_beheer():
     if request.method == 'POST':
         actie = request.form.get('actie')
         
-        # 1. Nieuw puur lokaal artikel
         if actie == 'nieuw_lokaal':
             nieuw = Lokaal_Artikel(
                 bedrijf_id=bedrijf_id,
@@ -209,18 +218,15 @@ def artikelen_beheer():
             db.session.commit()
             flash('Lokaal artikel aangemaakt.', 'success')
 
-        # 2. Koppel Global (Catalogus) artikel aan lokaal assortiment
         elif actie == 'koppel_global':
             global_id = request.form.get('global_id')
             global_item = db.session.query(Global_Catalogus).get(global_id)
-            
-            # Check duplicaten
             bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
             if not bestaat:
                 nieuw = Lokaal_Artikel(
                     bedrijf_id=bedrijf_id,
                     global_id=global_id,
-                    eigen_naam=global_item.generieke_naam, # Standaard naam overnemen
+                    eigen_naam=global_item.generieke_naam,
                     verpakkingseenheid_tekst='Stuk'
                 )
                 db.session.add(nieuw)
@@ -229,7 +235,6 @@ def artikelen_beheer():
             else:
                 flash('Artikel zit al in assortiment.', 'warning')
         
-        # 3. Bewerk bestaand artikel (Naam, Eenheid, Foto)
         elif actie == 'bewerk_artikel':
             artikel_id = request.form.get('artikel_id')
             artikel = db.session.query(Lokaal_Artikel).get(artikel_id)
@@ -245,8 +250,6 @@ def artikelen_beheer():
 
         return redirect(url_for('artikelen_beheer'))
 
-    # GET: Bouw de 'View' voor de template
-    # We halen alles op en bereiden het voor in Python voor maximale flexibiliteit in de template
     raw_results = db.session.query(Lokaal_Artikel, Global_Catalogus)\
         .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
         .filter(Lokaal_Artikel.bedrijf_id == bedrijf_id)\
@@ -254,16 +257,13 @@ def artikelen_beheer():
     
     view_data = []
     for lokaal, globaal in raw_results:
-        # Dit is de logica van vw_Artikel_Compleet in Python
-        display_naam = lokaal.eigen_naam # Lokaal wint altijd als het ingevuld is (wat verplicht is)
+        display_naam = lokaal.eigen_naam 
         display_foto = lokaal.foto_url or (globaal.foto_url if globaal else None)
-        
         is_globaal_gelinkt = globaal is not None
-        # Is de naam anders dan het origineel?
         is_afwijkend = is_globaal_gelinkt and (lokaal.eigen_naam != globaal.generieke_naam)
         
         view_data.append({
-            'obj': lokaal, # Het DB object voor ID's etc
+            'obj': lokaal, 
             'display_naam': display_naam,
             'display_foto': display_foto,
             'is_globaal': is_globaal_gelinkt,
@@ -271,7 +271,6 @@ def artikelen_beheer():
             'oorsprong_naam': globaal.generieke_naam if globaal else None
         })
 
-    # Haal globals op die NOG NIET in lokaal zitten
     linked_ids = db.session.query(Lokaal_Artikel.global_id).filter(
         Lokaal_Artikel.bedrijf_id == bedrijf_id, 
         Lokaal_Artikel.global_id.isnot(None)
@@ -291,13 +290,11 @@ def vervang_artikel():
     oud_artikel = db.session.query(Lokaal_Artikel).get(oud_lokaal_id)
     if not oud_artikel: return redirect(url_for('artikelen_beheer'))
 
-    # Zoek of maak doel artikel
     bestaand_doel = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=nieuw_global_id).first()
     
     if bestaand_doel:
         doel_id = bestaand_doel.lokaal_artikel_id
     else:
-        # Maak nieuw lokaal item aan dat linkt aan global
         global_item = db.session.query(Global_Catalogus).get(nieuw_global_id)
         nieuw = Lokaal_Artikel(
             bedrijf_id=bedrijf_id,
@@ -309,11 +306,10 @@ def vervang_artikel():
         db.session.flush()
         doel_id = nieuw.lokaal_artikel_id
 
-    # Migreer voorraad
     posities = db.session.query(Voorraad_Positie).filter_by(lokaal_artikel_id=oud_lokaal_id).all()
     for pos in posities:
         if db.session.query(Voorraad_Positie).filter_by(kast_id=pos.kast_id, lokaal_artikel_id=doel_id).first():
-            db.session.delete(pos) # Voorkom dubbel
+            db.session.delete(pos)
         else:
             pos.lokaal_artikel_id = doel_id
             
@@ -335,14 +331,12 @@ def api_artikel_gebruik(artikel_id):
 
 @app.route('/beheer/catalogus', methods=['GET', 'POST'])
 def beheer_catalogus():
-    """Admin route: Nieuwe GLOBAL artikelen maken en beheren."""
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
 
     if request.method == 'POST':
         actie = request.form.get('actie')
         
-        # 1. Maak een nieuw GLOBAL artikel aan (Master Data)
         if actie == 'nieuw_global':
             nieuw = Global_Catalogus(
                 generieke_naam=request.form.get('naam'),
@@ -358,7 +352,6 @@ def beheer_catalogus():
             db.session.commit()
             flash('Global item aangemaakt.', 'success')
         
-        # 2. Koppel (voor het geval de admin dit meteen wil doen)
         elif actie == 'koppel_lokaal':
             global_id = request.form.get('global_id')
             bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
@@ -374,7 +367,6 @@ def beheer_catalogus():
                 db.session.commit()
                 flash('Opgenomen in lokaal assortiment.', 'success')
 
-        # 3. Bewerk Global Item
         elif actie == 'bewerk_global':
             global_id = request.form.get('global_id')
             item = db.session.query(Global_Catalogus).get(global_id)
@@ -382,30 +374,22 @@ def beheer_catalogus():
                 item.generieke_naam = request.form.get('naam')
                 item.ean_code = request.form.get('ean')
                 item.categorie = request.form.get('categorie')
-                
                 file = request.files.get('afbeelding')
                 if file:
                     url = upload_image_to_azure(file)
                     if url and "ERROR" not in url: item.foto_url = url
-                
                 db.session.commit()
-                
-                # Check usage voor notificatie (soft warning)
                 usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
                 if usage_count > 0:
-                    flash(f'Item bijgewerkt. Let op: dit item wordt gebruikt door {usage_count} lokale bedrijven/artikelen.', 'warning')
+                    flash(f'Item bijgewerkt. Let op: dit item wordt gebruikt door {usage_count} bedrijven.', 'warning')
                 else:
                     flash('Item bijgewerkt.', 'success')
 
-        # 4. Verwijder Global Item
         elif actie == 'verwijder_global':
             global_id = request.form.get('global_id')
-            
-            # HARD CHECK: Voorkom verwijderen als het gebruikt wordt
             usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
-            
             if usage_count > 0:
-                flash(f'Kan item NIET verwijderen: het is in gebruik bij {usage_count} bedrijven/artikelen. Verwijder eerst de koppelingen.', 'danger')
+                flash(f'Kan item NIET verwijderen: het is in gebruik bij {usage_count} bedrijven.', 'danger')
             else:
                 item = db.session.query(Global_Catalogus).get(global_id)
                 if item:
@@ -415,9 +399,7 @@ def beheer_catalogus():
 
         return redirect(url_for('beheer_catalogus'))
 
-    # Haal alle globals op
     globals = db.session.query(Global_Catalogus).all()
-    # Check wat we al hebben om vinkjes te zetten
     lokale_ids = [a.global_id for a in db.session.query(Lokaal_Artikel.global_id).filter_by(bedrijf_id=bedrijf_id).all()]
 
     return render_template('beheer_catalogus.html', globals=globals, lokale_ids=lokale_ids)
@@ -441,19 +423,76 @@ def beheer_bedrijf():
 def beheer_infra():
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
+    
     if request.method == 'POST':
         actie = request.form.get('actie')
+        
         if actie == 'nieuwe_vestiging':
             db.session.add(Vestiging(bedrijf_id=bedrijf_id, naam=request.form.get('naam'), adres=request.form.get('adres')))
+        
         elif actie == 'nieuwe_ruimte':
-            db.session.add(Ruimte(bedrijf_id=bedrijf_id, vestiging_id=request.form.get('vestiging_id'), naam=request.form.get('naam'), type_ruimte='KAMER'))
+            # 1. Maak de nieuwe ruimte aan
+            nieuwe_ruimte = Ruimte(
+                bedrijf_id=bedrijf_id, 
+                vestiging_id=request.form.get('vestiging_id'), 
+                naam=request.form.get('naam'), 
+                type_ruimte='KAMER'
+            )
+            db.session.add(nieuwe_ruimte)
+            db.session.flush() # Zorgt dat we het nieuwe ID krijgen
+
+            # 2. Check of we moeten kopiëren
+            kopieer_id = request.form.get('kopieer_van_ruimte_id')
+            if kopieer_id:
+                try:
+                    # Haal alle kasten van de bron op
+                    bron_kasten = db.session.query(Kast).filter_by(ruimte_id=kopieer_id).all()
+                    count_kasten = 0
+                    count_items = 0
+                    
+                    for bron_kast in bron_kasten:
+                        # a. Maak kopie van de kast
+                        nieuwe_kast = Kast(
+                            bedrijf_id=bedrijf_id,
+                            ruimte_id=nieuwe_ruimte.ruimte_id,
+                            naam=bron_kast.naam,
+                            type_opslag=bron_kast.type_opslag
+                        )
+                        db.session.add(nieuwe_kast)
+                        db.session.flush() # ID ophalen voor de items
+                        count_kasten += 1
+                        
+                        # b. Haal inhoud van deze kast op en kopieer
+                        posities = db.session.query(Voorraad_Positie).filter_by(kast_id=bron_kast.kast_id).all()
+                        for pos in posities:
+                            nieuw_pos = Voorraad_Positie(
+                                bedrijf_id=bedrijf_id,
+                                kast_id=nieuwe_kast.kast_id,
+                                lokaal_artikel_id=pos.lokaal_artikel_id,
+                                strategie=pos.strategie,
+                                trigger_min=pos.trigger_min,
+                                target_max=pos.target_max,
+                                locatie_foto_url=pos.locatie_foto_url # Neem foto over (is een URL, dus kan gedeeld)
+                            )
+                            db.session.add(nieuw_pos)
+                            count_items += 1
+                            
+                    flash(f'Ruimte aangemaakt inclusief {count_kasten} kasten en {count_items} artikelen!', 'success')
+                except Exception as e:
+                    flash(f'Ruimte aangemaakt, maar fout bij kopiëren inrichting: {e}', 'warning')
+            else:
+                flash('Nieuwe lege ruimte aangemaakt.', 'success')
+
         elif actie == 'nieuwe_kast':
             db.session.add(Kast(bedrijf_id=bedrijf_id, ruimte_id=request.form.get('ruimte_id'), naam=request.form.get('naam'), type_opslag=request.form.get('type_opslag')))
+        
         db.session.commit()
         return redirect(url_for('beheer_infra'))
+    
     vestigingen = db.session.query(Vestiging).filter_by(bedrijf_id=bedrijf_id).all()
     ruimtes = db.session.query(Ruimte).join(Vestiging).filter(Vestiging.bedrijf_id == bedrijf_id).all()
     kasten = db.session.query(Kast).join(Ruimte).join(Vestiging).filter(Vestiging.bedrijf_id == bedrijf_id).all()
+    
     return render_template('beheer_infra.html', vestigingen=vestigingen, ruimtes=ruimtes, kasten=kasten)
 
 @app.route('/beheer/verwijder/<type>/<int:id>', methods=['POST'])
@@ -482,7 +521,6 @@ def verwijder_item(type, id):
 
 @app.route('/beheer/update/<type>/<int:id>', methods=['POST'])
 def update_item(type, id):
-    # Generieke update route voor infra
     try:
         if type == 'vestiging':
             item = db.session.query(Vestiging).get(id)

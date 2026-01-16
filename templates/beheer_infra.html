@@ -38,7 +38,6 @@
                             <small class="text-muted" style="font-size: 0.75rem;">{{ vestiging.adres or '-' }}</small>
                         </div>
                         <div class="d-flex gap-1">
-                            <!-- Edit Knop -->
                             <button class="btn btn-sm btn-outline-secondary py-0 px-1" 
                                     data-bs-toggle="modal" 
                                     data-bs-target="#editVestigingModal"
@@ -47,7 +46,6 @@
                                     data-adres="{{ vestiging.adres or '' }}">
                                 <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
                             </button>
-                            <!-- Delete Form -->
                             <form action="{{ url_for('verwijder_item', type='vestiging', id=vestiging.vestiging_id) }}" method="POST" onsubmit="return confirm('Weet je zeker dat je deze vestiging wilt verwijderen?');">
                                 <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">
                                     <i class="bi bi-trash" style="font-size: 0.8rem;"></i>
@@ -81,6 +79,18 @@
                     <div class="input-group mb-2">
                         <input type="text" name="naam" class="form-control form-control-sm" placeholder="Naam Ruimte" required>
                     </div>
+                    
+                    <!-- NIEUWE FUNCTIE: KOPIEER INRICHTING -->
+                    <div class="mb-2">
+                        <label class="form-label small text-muted mb-1"><i class="bi bi-copy"></i> Kopieer inrichting van (optioneel):</label>
+                        <select name="kopieer_van_ruimte_id" class="form-select form-select-sm border-info bg-light">
+                            <option value="">- Begin met lege kamer -</option>
+                            {% for r in ruimtes %}
+                                <option value="{{ r.ruimte_id }}">{{ r.naam }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
                     <button type="submit" class="btn btn-primary w-100 btn-sm"><i class="bi bi-plus-lg me-1"></i>Toevoegen</button>
                 </form>
 
@@ -97,7 +107,6 @@
                             </div>
                         </div>
                         <div class="d-flex gap-1">
-                            <!-- Edit Knop -->
                             <button class="btn btn-sm btn-outline-secondary py-0 px-1" 
                                     data-bs-toggle="modal" 
                                     data-bs-target="#editRuimteModal"
@@ -105,7 +114,6 @@
                                     data-naam="{{ ruimte.naam }}">
                                 <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
                             </button>
-                            <!-- Delete Form -->
                             <form action="{{ url_for('verwijder_item', type='ruimte', id=ruimte.ruimte_id) }}" method="POST" onsubmit="return confirm('Weet je zeker dat je deze ruimte wilt verwijderen?');">
                                 <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">
                                     <i class="bi bi-trash" style="font-size: 0.8rem;"></i>
@@ -161,7 +169,6 @@
                             </div>
                         </div>
                         <div class="d-flex gap-1">
-                            <!-- Edit Knop -->
                             <button class="btn btn-sm btn-outline-secondary py-0 px-1" 
                                     data-bs-toggle="modal" 
                                     data-bs-target="#editKastModal"
@@ -170,7 +177,6 @@
                                     data-type="{{ kast.type_opslag }}">
                                 <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
                             </button>
-                            <!-- Delete Form -->
                             <form action="{{ url_for('verwijder_item', type='kast', id=kast.kast_id) }}" method="POST" onsubmit="return confirm('Weet je zeker dat je deze kast wilt verwijderen?');">
                                 <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">
                                     <i class="bi bi-trash" style="font-size: 0.8rem;"></i>
@@ -272,7 +278,6 @@
     </div>
 </div>
 
-<!-- JavaScript om data in Modals te laden -->
 <script>
     // Vestiging
     var editVestigingModal = document.getElementById('editVestigingModal')

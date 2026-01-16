@@ -26,14 +26,13 @@
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">Assistente</a>
                         <ul class="dropdown-menu">
-                            <!-- DE FIX ZIT HIER: assistent_kamers i.p.v. assistent_kasten -->
                             <li><a class="dropdown-item" href="{{ url_for('assistent_kamers') }}">Mijn Kamers</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('artikelen_beheer') }}">Mijn Artikelen</a></li>
                         </ul>
                     </li>
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">Beheer</a>
                         <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="{{ url_for('artikelen_beheer') }}">Artikel Beheer</a></li>
                             <li><a class="dropdown-item" href="{{ url_for('beheer_catalogus') }}">Catalogus (Admin)</a></li>
                             <li><a class="dropdown-item" href="{{ url_for('beheer_infra') }}">Inrichting</a></li>
                             <li><a class="dropdown-item" href="{{ url_for('beheer_bedrijf') }}">Bedrijfsgegevens</a></li>
