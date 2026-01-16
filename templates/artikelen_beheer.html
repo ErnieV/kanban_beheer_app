@@ -1,0 +1,323 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-3">
+    <a href="{{ url_for('dashboard') }}" class="text-decoration-none text-muted">
+        <i class="bi bi-arrow-left"></i> Terug naar Dashboard
+    </a>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-capsule text-primary"></i> Artikel Beheer</h2>
+    <button class="btn btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#nieuwLokaalForm">
+        <i class="bi bi-plus-lg"></i> Nieuw Artikel Maken
+    </button>
+</div>
+
+<!-- Nieuw Artikel Formulier (Inklapbaar) -->
+<div class="collapse mb-4" id="nieuwLokaalForm">
+    <div class="card border-success shadow-sm">
+        <div class="card-header bg-success text-white">Handmatig Artikel Toevoegen</div>
+        <div class="card-body">
+            <p class="small text-muted">Gebruik dit alleen als het artikel niet in de wereldwijde catalogus staat.</p>
+            <form method="POST" enctype="multipart/form-data" class="row g-3">
+                <input type="hidden" name="actie" value="nieuw_lokaal">
+                <div class="col-md-5">
+                    <label class="form-label">Naam</label>
+                    <input type="text" name="naam" class="form-control" placeholder="Bijv. Eigen Verbandset" required>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Eenheid</label>
+                    <input type="text" name="eenheid" class="form-control" placeholder="stuks">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Afbeelding</label>
+                    <input type="file" name="afbeelding" class="form-control" accept=".png">
+                </div>
+                <div class="col-md-2 align-self-end">
+                    <button type="submit" class="btn btn-success w-100">Opslaan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- TABS -->
+<ul class="nav nav-tabs nav-tabs-bordered mb-4" id="myTab" role="tablist">
+    <li class="nav-item">
+        <button class="nav-link active fw-bold" id="lokaal-tab" data-bs-toggle="tab" data-bs-target="#lokaal-pane">
+            <i class="bi bi-list-check"></i> Mijn Assortiment
+        </button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link text-muted" id="global-tab" data-bs-toggle="tab" data-bs-target="#global-pane">
+            <i class="bi bi-globe"></i> Toevoegen uit Catalogus
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    
+    <!-- TAB 1: MIJN ASSORTIMENT -->
+    <div class="tab-pane fade show active" id="lokaal-pane">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body p-0">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 70px;">Foto</th>
+                            <th>Naam & Details</th>
+                            <th style="width: 150px;">Bron</th>
+                            <th style="width: 200px;" class="text-end">Acties</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in artikelen %}
+                        <tr>
+                            <td>
+                                {% if item.display_foto %}
+                                    <img src="{{ item.display_foto }}" class="rounded border" style="width: 50px; height: 50px; object-fit: contain;">
+                                {% else %}
+                                    <div class="rounded border bg-light d-flex align-items-center justify-content-center text-muted" style="width: 50px; height: 50px;"><i class="bi bi-image"></i></div>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="fw-bold">{{ item.display_naam }}</div>
+                                <div class="small text-muted">
+                                    {{ item.obj.verpakkingseenheid_tekst or 'Stuk' }}
+                                    {% if item.is_afwijkend %}
+                                        <br><span class="text-warning fst-italic"><i class="bi bi-pencil-square"></i> Afwijkend van catalogus ({{ item.oorsprong_naam }})</span>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td>
+                                {% if item.is_globaal %}
+                                    <span class="badge bg-primary bg-opacity-10 text-primary border border-primary"><i class="bi bi-globe"></i> Catalogus</span>
+                                {% else %}
+                                    <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary"><i class="bi bi-hdd"></i> Lokaal</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end">
+                                <div class="btn-group">
+                                    <!-- Info Knop (Aangepast met data-attributes) -->
+                                    <button class="btn btn-sm btn-outline-info" title="Waar ligt dit?" 
+                                            onclick="showUsage(this.getAttribute('data-id'), this.getAttribute('data-naam'))"
+                                            data-id="{{ item.obj.lokaal_artikel_id }}" 
+                                            data-naam="{{ item.display_naam }}">
+                                        <i class="bi bi-geo-alt"></i>
+                                    </button>
+                                    
+                                    <!-- Bewerk Knop -->
+                                    <button class="btn btn-sm btn-outline-secondary" title="Bewerken" 
+                                            data-bs-toggle="modal" 
+                                            data-bs-target="#bewerkModal"
+                                            data-id="{{ item.obj.lokaal_artikel_id }}"
+                                            data-naam="{{ item.obj.eigen_naam or '' }}"
+                                            data-eenheid="{{ item.obj.verpakkingseenheid_tekst or '' }}"
+                                            data-bron="{{ 'Catalogus' if item.is_globaal else 'Lokaal' }}">
+                                        <i class="bi bi-pencil"></i>
+                                    </button>
+
+                                    <!-- Merge/Vervang Knop -->
+                                    <button class="btn btn-sm btn-outline-warning" title="Samenvoegen met Catalogus" 
+                                            data-bs-toggle="modal" 
+                                            data-bs-target="#vervangModal"
+                                            data-oud-id="{{ item.obj.lokaal_artikel_id }}"
+                                            data-oud-naam="{{ item.display_naam }}">
+                                        <i class="bi bi-arrow-repeat"></i>
+                                    </button>
+
+                                    <!-- Verwijder Knop -->
+                                    <form action="{{ url_for('verwijder_item', type='artikel', id=item.obj.lokaal_artikel_id) }}" method="POST" class="d-inline" onsubmit="return confirm('Weet je zeker dat je dit artikel wilt verwijderen uit het assortiment?');">
+                                        <button class="btn btn-sm btn-outline-danger" title="Verwijderen"><i class="bi bi-trash"></i></button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center py-4 text-muted">Je assortiment is nog leeg. Voeg items toe uit de catalogus.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 2: CATALOGUS -->
+    <div class="tab-pane fade" id="global-pane">
+        <div class="alert alert-light border">
+            <i class="bi bi-info-circle"></i> Hier vind je alle artikelen die nog <strong>niet</strong> in jouw assortiment zitten. Klik op <span class="badge bg-primary">+ Toevoegen</span> om ze te gebruiken.
+        </div>
+        
+        <table class="table table-hover align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th style="width: 70px;">Foto</th>
+                    <th>Artikel</th>
+                    <th style="width: 150px;">EAN</th>
+                    <th style="width: 120px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in beschikbare_globals %}
+                <tr>
+                    <td>
+                         {% if item.foto_url %}
+                            <img src="{{ item.foto_url }}" class="rounded" style="width: 40px; height: 40px; object-fit: contain;">
+                        {% endif %}
+                    </td>
+                    <td>
+                        <strong>{{ item.generieke_naam }}</strong><br>
+                        <small class="text-muted">{{ item.categorie or 'Algemeen' }}</small>
+                    </td>
+                    <td>{{ item.ean_code or '-' }}</td>
+                    <td class="text-end">
+                        <form method="POST">
+                            <input type="hidden" name="actie" value="koppel_global">
+                            <input type="hidden" name="global_id" value="{{ item.global_id }}">
+                            <button type="submit" class="btn btn-sm btn-primary w-100">
+                                <i class="bi bi-plus"></i> Toevoegen
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                    <tr><td colspan="4" class="text-center text-muted">Geen nieuwe items in catalogus.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- MODAL: BEWERKEN (Nieuw) -->
+<div class="modal fade" id="bewerkModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" enctype="multipart/form-data">
+                <div class="modal-header">
+                    <h5 class="modal-title">Artikel Bewerken</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="actie" value="bewerk_artikel">
+                    <input type="hidden" name="artikel_id" id="bewerkId">
+                    
+                    <div class="alert alert-info py-2 small" id="bronInfo"></div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Naam (Lokaal)</label>
+                        <input type="text" name="naam" id="bewerkNaam" class="form-control" required>
+                        <div class="form-text">Wijzig de naam alleen voor jouw praktijk.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Eenheid</label>
+                        <input type="text" name="eenheid" id="bewerkEenheid" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Eigen Foto Uploaden</label>
+                        <input type="file" name="afbeelding" class="form-control" accept=".png">
+                        <div class="form-text">Overschrijft de catalogus foto.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuleren</button>
+                    <button type="submit" class="btn btn-primary">Opslaan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: VERVANGEN -->
+<div class="modal fade" id="vervangModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form action="{{ url_for('vervang_artikel') }}" method="POST">
+                <div class="modal-header">
+                    <h5 class="modal-title">Artikel Samenvoegen</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Je wilt <strong><span id="vervangNaamPlaceholder"></span></strong> vervangen door een catalogus-item.</p>
+                    <input type="hidden" name="oud_lokaal_id" id="vervangOudId">
+                    
+                    <label class="form-label fw-bold">Kies het juiste artikel uit de Catalogus:</label>
+                    <select name="nieuw_global_id" class="form-select" size="5" required>
+                        {% for g in beschikbare_globals %}
+                            <option value="{{ g.global_id }}">{{ g.generieke_naam }} ({{ g.ean_code or 'geen EAN' }})</option>
+                        {% endfor %}
+                    </select>
+                    <div class="alert alert-warning mt-3 small">
+                        <i class="bi bi-exclamation-triangle-fill"></i> <strong>Let op:</strong> 
+                        Alle kasten waar dit artikel in ligt, worden automatisch geüpdatet naar het nieuwe artikel. Het oude lokale artikel wordt verwijderd.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuleren</button>
+                    <button type="submit" class="btn btn-danger">Uitvoeren</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: LOCATIES -->
+<div class="modal fade" id="usageModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Voorraad Locaties: <span id="usageTitle"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <ul class="list-group list-group-flush" id="usageList">
+                    <li class="list-group-item text-center">Laden...</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Bewerk Modal
+    var bewerkModal = document.getElementById('bewerkModal')
+    bewerkModal.addEventListener('show.bs.modal', function (event) {
+        var button = event.relatedTarget
+        document.getElementById('bewerkId').value = button.getAttribute('data-id')
+        document.getElementById('bewerkNaam').value = button.getAttribute('data-naam')
+        document.getElementById('bewerkEenheid').value = button.getAttribute('data-eenheid')
+        document.getElementById('bronInfo').textContent = "Bron: " + button.getAttribute('data-bron')
+    })
+
+    // Vervang Modal
+    var vervangModal = document.getElementById('vervangModal')
+    vervangModal.addEventListener('show.bs.modal', function (event) {
+        var button = event.relatedTarget
+        document.getElementById('vervangOudId').value = button.getAttribute('data-oud-id')
+        document.getElementById('vervangNaamPlaceholder').textContent = button.getAttribute('data-oud-naam')
+    })
+
+    // Usage Fetch
+    function showUsage(id, naam) {
+        var myModal = new bootstrap.Modal(document.getElementById('usageModal'));
+        document.getElementById('usageTitle').textContent = naam;
+        var list = document.getElementById('usageList');
+        list.innerHTML = '<li class="list-group-item text-center text-muted"><div class="spinner-border spinner-border-sm"></div></li>';
+        myModal.show();
+
+        fetch('/api/artikel-gebruik/' + id)
+            .then(response => response.json())
+            .then(data => {
+                list.innerHTML = '';
+                if(data.length === 0) list.innerHTML = '<li class="list-group-item text-muted">Ligt in geen enkele kast.</li>';
+                else {
+                    data.forEach(item => {
+                        list.innerHTML += `<li class="list-group-item d-flex justify-content-between">
+                            <span><strong>${item.ruimte}</strong> - ${item.kast}</span>
+                            <span class="badge bg-light text-dark border">Min: ${item.min} / Max: ${item.max}</span>
+                        </li>`;
+                    });
+                }
+            });
+    }
+</script>
+{% endblock %}

@@ -3,49 +3,66 @@
 {% block content %}
 <div class="row text-center mt-5">
     <div class="col-12">
-        <h1 class="display-4">Vivaldi Voorraad</h1>
-        <p class="lead">Goedemorgen! Wat wil je vandaag doen?</p>
-        
-        {% if not db_status %}
-        <div class="alert alert-danger">
-            <strong>Let op:</strong> Geen verbinding met de database. Sommige functies werken niet.
-        </div>
+        {% if huidig_bedrijf and huidig_bedrijf.logo_url %}
+            <img src="{{ huidig_bedrijf.logo_url }}" alt="Logo" style="max-height: 100px; margin-bottom: 20px;">
         {% endif %}
+        <h1 class="display-4">Vivaldi Voorraad</h1>
+        
+        {% if huidig_bedrijf %}
+            <p class="lead">Welkom bij <strong>{{ huidig_bedrijf.naam }}</strong></p>
+        {% else %}
+            <p class="lead">Selecteer een bedrijf om te starten</p>
+        {% endif %}
+
+        <div class="btn-group mb-5">
+            <button type="button" class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown">
+                <i class="bi bi-building"></i> Wissel van Bedrijf
+            </button>
+            <ul class="dropdown-menu">
+                {% for b in bedrijven %}
+                <li><a class="dropdown-item" href="{{ url_for('switch_bedrijf', bedrijf_id=b.bedrijf_id) }}">{{ b.naam }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
     </div>
 </div>
 
-<div class="row mt-4 justify-content-center">
-    <!-- VOOR DE ASSISTENTE -->
-    <div class="col-md-5">
+<div class="row justify-content-center">
+    <!-- ASSISTENTE -->
+    <div class="col-md-5 mb-4">
         <div class="card h-100 shadow-sm border-primary">
             <div class="card-header bg-primary text-white">
-                <h4 class="my-0">👩‍⚕️ Assistente</h4>
+                <h4 class="my-0"><i class="bi bi-person-workspace"></i> Assistente</h4>
             </div>
             <div class="card-body">
                 <p>Beheer de voorraad in de behandelkamers.</p>
                 <div class="d-grid gap-2">
-                    <a href="{{ url_for('assistent_kasten') }}" class="btn btn-primary btn-lg">
-                        Naar de Kasten
+                    <!-- LINK AANGEPAST NAAR KAMERS -->
+                    <a href="{{ url_for('assistent_kamers') }}" class="btn btn-primary btn-lg">
+                        <i class="bi bi-door-open-fill"></i> Naar mijn Kamers
                     </a>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- VOOR DE BEHEERDER -->
-    <div class="col-md-5">
+    <!-- BEHEERDER -->
+    <div class="col-md-5 mb-4">
         <div class="card h-100 shadow-sm border-secondary">
             <div class="card-header bg-secondary text-white">
-                <h4 class="my-0">🛠️ Beheerder</h4>
+                <h4 class="my-0"><i class="bi bi-gear-wide-connected"></i> Beheerder</h4>
             </div>
             <div class="card-body">
-                <p>Beheer het assortiment en de inrichting.</p>
                 <div class="d-grid gap-2">
-                    <a href="{{ url_for('beheer_catalogus') }}" class="btn btn-outline-secondary">
-                        Catalogus & Assortiment
+                    <!-- LINK AANGEPAST NAAR NIEUW ARTIKEL BEHEER -->
+                    <a href="{{ url_for('artikelen_beheer') }}" class="btn btn-outline-secondary text-start">
+                        <i class="bi bi-capsule"></i> Artikel Beheer (Lokaal & Global)
                     </a>
-                    <a href="{{ url_for('beheer_infra') }}" class="btn btn-outline-secondary">
-                        Kamers & Kasten
+                    <a href="{{ url_for('beheer_infra') }}" class="btn btn-outline-secondary text-start">
+                        <i class="bi bi-diagram-3"></i> Kamers & Inrichting
+                    </a>
+                    <a href="{{ url_for('beheer_bedrijf') }}" class="btn btn-outline-secondary text-start">
+                        <i class="bi bi-building"></i> Bedrijfsgegevens
                     </a>
                 </div>
             </div>

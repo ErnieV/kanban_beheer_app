@@ -1,56 +1,31 @@
-<!-- Bestand: templates/kast_selectie.html -->
 {% extends "base.html" %}
 {% block content %}
-<div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4">
-    <div>
-        <h2 class="mb-1">Kasten Overzicht</h2>
-        <p class="text-muted mb-0">Selecteer een opslaglocatie om de voorraad te beheren.</p>
-    </div>
-    <div class="mt-3 mt-md-0">
-        <button class="btn btn-outline-primary disabled"><i class="bi bi-plus-lg me-1"></i>Nieuwe Kast</button>
-    </div>
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2><i class="bi bi-box-seam"></i> Selecteer Kast</h2>
+    <a href="/" class="btn btn-outline-secondary">Terug</a>
 </div>
 
-<!-- Grid Layout voor Kasten -->
-<div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+<div class="row">
     {% for kast, ruimte, vestiging in kasten %}
-    <div class="col">
-        <a href="{{ url_for('kast_inhoud', kast_id=kast.kast_id) }}" class="text-decoration-none">
-            <div class="card h-100 position-relative overflow-hidden group-hover-effect" style="transition: transform 0.2s;">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-start mb-3">
-                        <div class="p-3 rounded-3 bg-primary bg-opacity-10 text-primary">
-                            <i class="bi bi-archive fs-4"></i>
-                        </div>
-                        <span class="badge bg-light text-secondary border fw-normal">{{ vestiging.naam }}</span>
-                    </div>
-                    
-                    <h5 class="card-title text-dark mb-1">{{ kast.naam }}</h5>
-                    <div class="d-flex align-items-center text-muted small">
-                        <i class="bi bi-geo-alt me-1"></i>
-                        <span>{{ ruimte.naam }}</span>
-                    </div>
-                </div>
-                
-                <div class="card-footer bg-transparent border-top-0 pt-0 pb-3">
-                    <div class="d-grid">
-                        <span class="btn btn-light text-primary fw-medium btn-sm">
-                            Openen <i class="bi bi-arrow-right ms-1"></i>
-                        </span>
-                    </div>
-                </div>
+    <div class="col-md-4 mb-3">
+        <div class="card h-100 shadow-sm hover-shadow">
+            <div class="card-body">
+                <h5 class="card-title">{{ kast.naam }}</h5>
+                <h6 class="card-subtitle mb-2 text-muted">{{ ruimte.naam }} ({{ vestiging.naam }})</h6>
+                <p class="card-text small">
+                    Type: {{ kast.type_opslag or 'Standaard' }}
+                </p>
+                <!-- DE FIX ZIT HIERONDER: assistent_kast_inhoud -->
+                <a href="{{ url_for('assistent_kast_inhoud', kast_id=kast.kast_id) }}" class="btn btn-primary w-100 stretched-link">
+                    Openen
+                </a>
             </div>
-        </a>
+        </div>
+    </div>
+    {% else %}
+    <div class="col-12">
+        <div class="alert alert-info">Er zijn nog geen kasten ingericht voor dit bedrijf.</div>
     </div>
     {% endfor %}
 </div>
-
-<!-- Hover effect inline fix -->
-<style>
-    .card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 10px 20px rgba(0,0,0,0.08) !important;
-        border-color: #0d6efd;
-    }
-</style>
 {% endblock %}

@@ -1,9 +1,10 @@
 import os
 import uuid
 import urllib.parse
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.ext.automap import automap_base
+from sqlalchemy import func, or_
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from azure.storage.blob import BlobServiceClient
@@ -12,7 +13,7 @@ from azure.storage.blob import BlobServiceClient
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'dev_key')
+app.secret_key = os.environ.get('SECRET_KEY', 'super_geheim_sleutel_123')
 
 # --- CONFIGURATIE ---
 db_server = os.environ.get('DB_SERVER')
@@ -22,11 +23,9 @@ db_pass = os.environ.get('DB_PASS')
 connect_str = os.environ.get('AZURE_STORAGE_CONNECTION_STRING')
 container_name = os.environ.get('AZURE_CONTAINER_NAME')
 
-# Check of variabelen bestaan
 if not all([db_server, db_name, db_user, db_pass]):
     print("WAARSCHUWING: Database configuratie ontbreekt!")
 
-# Veilig encoden van user/pass
 encoded_user = urllib.parse.quote_plus(db_user) if db_user else ''
 encoded_pass = urllib.parse.quote_plus(db_pass) if db_pass else ''
 
@@ -40,7 +39,6 @@ db = SQLAlchemy(app)
 Base = automap_base()
 db_operational = False
 
-# We definiëren globale variabelen voor de classes
 Global_Catalogus = None
 Lokaal_Artikel = None
 Voorraad_Positie = None
@@ -53,8 +51,6 @@ Leverancier = None
 with app.app_context():
     try:
         Base.prepare(db.engine, reflect=True)
-        
-        # Haal de classes veilig op
         Global_Catalogus = getattr(Base.classes, 'Global_Catalogus', None)
         Lokaal_Artikel = getattr(Base.classes, 'Lokaal_Artikel', None)
         Voorraad_Positie = getattr(Base.classes, 'Voorraad_Positie', None)
@@ -67,23 +63,21 @@ with app.app_context():
         if Global_Catalogus and Bedrijf:
             db_operational = True
             print("Database succesvol verbonden.")
-        else:
-            print("WAARSCHUWING: Niet alle tabellen konden worden geladen.")
-
     except Exception as e:
         print(f"CRITIQUE DB ERROR: {e}")
 
-# --- CONTEXT PROCESSOR (NIEUW) ---
-@app.context_processor
-def inject_bedrijf_context():
-    """Zorgt dat 'huidig_bedrijf' beschikbaar is in ALLE templates."""
-    if db_operational and Bedrijf:
-        # Hardcoded op 1 voor deze fase, later dynamisch
-        bedrijf = db.session.query(Bedrijf).get(1)
-        return dict(huidig_bedrijf=bedrijf)
-    return dict(huidig_bedrijf=None)
+# --- CONTEXT PROCESSOR & HELPERS ---
 
-# --- HELPER FUNCTIES ---
+@app.context_processor
+def inject_context():
+    if not db_operational or not Bedrijf:
+        return dict(huidig_bedrijf=None)
+    bedrijf_id = session.get('bedrijf_id', 1)
+    bedrijf = db.session.query(Bedrijf).get(bedrijf_id)
+    return dict(huidig_bedrijf=bedrijf)
+
+def get_huidig_bedrijf_id():
+    return session.get('bedrijf_id', 1)
 
 def check_db():
     if not db_operational:
@@ -93,16 +87,14 @@ def check_db():
 
 def upload_image_to_azure(file):
     if not file or file.filename == '': return None
-    if not file.filename.lower().endswith('.png'): return "ERROR_TYPE"
-
+    if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg')): return "ERROR_TYPE"
     try:
         filename = secure_filename(file.filename)
         unique_filename = f"{uuid.uuid4()}-{filename}"
         if not connect_str: return "ERROR_CONFIG"
-
         blob_service_client = BlobServiceClient.from_connection_string(connect_str)
         blob_client = blob_service_client.get_blob_client(container=container_name, blob=unique_filename)
-        blob_client.upload_blob(file)
+        blob_client.upload_blob(file, overwrite=True)
         return blob_client.url
     except Exception as e:
         print(f"Upload error: {e}")
@@ -112,78 +104,246 @@ def upload_image_to_azure(file):
 
 @app.route('/')
 def dashboard():
-    return render_template('dashboard.html', db_status=db_operational)
+    if not check_db(): return render_template('dashboard.html', bedrijven=[])
+    alle_bedrijven = db.session.query(Bedrijf).all()
+    return render_template('dashboard.html', bedrijven=alle_bedrijven)
 
-# === ASSISTENT ROUTES ===
-@app.route('/assistent/kasten')
-def assistent_kasten():
-    if not check_db(): return redirect(url_for('dashboard'))
-    try:
-        kasten = db.session.query(Kast, Ruimte, Vestiging)\
-            .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
-            .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
-            .order_by(Vestiging.naam, Ruimte.naam, Kast.naam).all()
-        return render_template('kast_selectie.html', kasten=kasten)
-    except Exception as e:
-        return f"Error: {e}", 500
+@app.route('/switch-bedrijf/<int:bedrijf_id>')
+def switch_bedrijf(bedrijf_id):
+    session['bedrijf_id'] = bedrijf_id
+    flash('Bedrijf gewijzigd.', 'info')
+    return redirect(url_for('dashboard'))
 
-@app.route('/assistent/kast/<int:kast_id>', methods=['GET', 'POST'])
-def assistent_kast_inhoud(kast_id):
+# =========================================================
+#  ASSISTENT FLOW (Kamers & Kasten)
+# =========================================================
+
+@app.route('/assistent/kamers')
+def assistent_kamers():
     if not check_db(): return redirect(url_for('dashboard'))
-    huidig_bedrijf_id = 1
+    bedrijf_id = get_huidig_bedrijf_id()
     
-    gekozen_kast = db.session.query(Kast).get(kast_id)
-    
-    if request.method == 'POST':
-        artikel_id = request.form.get('artikel_id')
+    ruimtes = db.session.query(Ruimte, Vestiging, func.count(Kast.kast_id).label('kast_count'))\
+        .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
+        .outerjoin(Kast, Ruimte.ruimte_id == Kast.ruimte_id)\
+        .filter(Vestiging.bedrijf_id == bedrijf_id)\
+        .group_by(Ruimte.ruimte_id, Ruimte.naam, Ruimte.type_ruimte, Vestiging.naam)\
+        .order_by(Vestiging.naam, Ruimte.naam).all()
         
-        # Check dubbelingen
-        bestaat = db.session.query(Voorraad_Positie).filter_by(kast_id=kast_id, lokaal_artikel_id=artikel_id).first()
-        if bestaat:
-            flash('Dit artikel ligt al in deze kast.', 'warning')
-        else:
-            nieuw = Voorraad_Positie(
-                bedrijf_id=huidig_bedrijf_id,
-                kast_id=kast_id,
-                lokaal_artikel_id=artikel_id,
-                strategie='TWO_BIN',
-                trigger_min=request.form.get('trigger_min'),
-                target_max=request.form.get('target_max')
-            )
-            # Foto upload
-            file = request.files.get('locatie_foto')
-            if file:
-                url = upload_image_to_azure(file)
-                if url and "ERROR" not in url: nieuw.locatie_foto_url = url
-            
-            db.session.add(nieuw)
-            db.session.commit()
-            flash('Artikel toegevoegd.', 'success')
-        return redirect(url_for('assistent_kast_inhoud', kast_id=kast_id))
+    return render_template('assistent_kamer_selectie.html', ruimtes=ruimtes)
 
-    # Haal inhoud op (SLIMME WEERGAVE LOGICA)
-    # We joinen alles zodat we in de template de 'inheritance' kunnen tonen
-    inhoud = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus)\
-        .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
-        .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
-        .filter(Voorraad_Positie.kast_id == kast_id).all()
-        
-    alle_artikelen = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=huidig_bedrijf_id).order_by(Lokaal_Artikel.eigen_naam).all()
-    
-    return render_template('kast_inhoud.html', kast=gekozen_kast, inhoud=inhoud, artikelen=alle_artikelen)
-
-# === BEHEERDER ROUTES ===
-
-@app.route('/beheer/catalogus', methods=['GET', 'POST'])
-def beheer_catalogus():
+@app.route('/assistent/kamer/<int:ruimte_id>')
+def assistent_kamer_view(ruimte_id):
     if not check_db(): return redirect(url_for('dashboard'))
-    huidig_bedrijf_id = 1
+    bedrijf_id = get_huidig_bedrijf_id()
     
+    ruimte = db.session.query(Ruimte).get(ruimte_id)
+    kasten_in_kamer = db.session.query(Kast).filter_by(ruimte_id=ruimte_id).all()
+    
+    kasten_data = {}
+    for kast in kasten_in_kamer:
+        inhoud = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus)\
+            .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
+            .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
+            .filter(Voorraad_Positie.kast_id == kast.kast_id)\
+            .all()
+        kasten_data[kast] = inhoud
+
+    alle_artikelen = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id).order_by(Lokaal_Artikel.eigen_naam).all()
+    
+    return render_template('assistent_kamer_view.html', ruimte=ruimte, kasten_data=kasten_data, alle_artikelen=alle_artikelen)
+
+@app.route('/assistent/update-voorraad/<int:positie_id>', methods=['POST'])
+def update_voorraad_positie(positie_id):
+    positie = db.session.query(Voorraad_Positie).get(positie_id)
+    if positie:
+        positie.trigger_min = request.form.get('trigger_min')
+        positie.target_max = request.form.get('target_max')
+        db.session.commit()
+        flash('Voorraadniveaus bijgewerkt.', 'success')
+    kast = db.session.query(Kast).get(positie.kast_id)
+    return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
+
+@app.route('/assistent/kast/<int:kast_id>/toevoegen', methods=['POST'])
+def add_to_kast_from_room(kast_id):
+    bedrijf_id = get_huidig_bedrijf_id()
+    artikel_id = request.form.get('artikel_id')
+    bestaat = db.session.query(Voorraad_Positie).filter_by(kast_id=kast_id, lokaal_artikel_id=artikel_id).first()
+    if not bestaat:
+        nieuw = Voorraad_Positie(
+            bedrijf_id=bedrijf_id, kast_id=kast_id, lokaal_artikel_id=artikel_id,
+            strategie='TWO_BIN', trigger_min=1, target_max=2
+        )
+        db.session.add(nieuw)
+        db.session.commit()
+        flash('Artikel toegevoegd.', 'success')
+    else:
+        flash('Artikel zit al in de kast.', 'warning')
+    kast = db.session.query(Kast).get(kast_id)
+    return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
+
+# =========================================================
+#  ARTIKEL BEHEER (Centraal)
+# =========================================================
+
+@app.route('/artikelen-beheer', methods=['GET', 'POST'])
+def artikelen_beheer():
+    if not check_db(): return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+
     if request.method == 'POST':
         actie = request.form.get('actie')
         
+        # 1. Nieuw puur lokaal artikel
+        if actie == 'nieuw_lokaal':
+            nieuw = Lokaal_Artikel(
+                bedrijf_id=bedrijf_id,
+                eigen_naam=request.form.get('naam'),
+                verpakkingseenheid_tekst=request.form.get('eenheid'),
+            )
+            file = request.files.get('afbeelding')
+            if file:
+                url = upload_image_to_azure(file)
+                if url and "ERROR" not in url: nieuw.foto_url = url
+            db.session.add(nieuw)
+            db.session.commit()
+            flash('Lokaal artikel aangemaakt.', 'success')
+
+        # 2. Koppel Global (Catalogus) artikel aan lokaal assortiment
+        elif actie == 'koppel_global':
+            global_id = request.form.get('global_id')
+            global_item = db.session.query(Global_Catalogus).get(global_id)
+            
+            # Check duplicaten
+            bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
+            if not bestaat:
+                nieuw = Lokaal_Artikel(
+                    bedrijf_id=bedrijf_id,
+                    global_id=global_id,
+                    eigen_naam=global_item.generieke_naam, # Standaard naam overnemen
+                    verpakkingseenheid_tekst='Stuk'
+                )
+                db.session.add(nieuw)
+                db.session.commit()
+                flash(f'"{global_item.generieke_naam}" toegevoegd aan assortiment.', 'success')
+            else:
+                flash('Artikel zit al in assortiment.', 'warning')
+        
+        # 3. Bewerk bestaand artikel (Naam, Eenheid, Foto)
+        elif actie == 'bewerk_artikel':
+            artikel_id = request.form.get('artikel_id')
+            artikel = db.session.query(Lokaal_Artikel).get(artikel_id)
+            if artikel:
+                artikel.eigen_naam = request.form.get('naam')
+                artikel.verpakkingseenheid_tekst = request.form.get('eenheid')
+                file = request.files.get('afbeelding')
+                if file:
+                    url = upload_image_to_azure(file)
+                    if url and "ERROR" not in url: artikel.foto_url = url
+                db.session.commit()
+                flash('Artikel gegevens bijgewerkt.', 'success')
+
+        return redirect(url_for('artikelen_beheer'))
+
+    # GET: Bouw de 'View' voor de template
+    # We halen alles op en bereiden het voor in Python voor maximale flexibiliteit in de template
+    raw_results = db.session.query(Lokaal_Artikel, Global_Catalogus)\
+        .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
+        .filter(Lokaal_Artikel.bedrijf_id == bedrijf_id)\
+        .order_by(Lokaal_Artikel.eigen_naam).all()
+    
+    view_data = []
+    for lokaal, globaal in raw_results:
+        # Dit is de logica van vw_Artikel_Compleet in Python
+        display_naam = lokaal.eigen_naam # Lokaal wint altijd als het ingevuld is (wat verplicht is)
+        display_foto = lokaal.foto_url or (globaal.foto_url if globaal else None)
+        
+        is_globaal_gelinkt = globaal is not None
+        # Is de naam anders dan het origineel?
+        is_afwijkend = is_globaal_gelinkt and (lokaal.eigen_naam != globaal.generieke_naam)
+        
+        view_data.append({
+            'obj': lokaal, # Het DB object voor ID's etc
+            'display_naam': display_naam,
+            'display_foto': display_foto,
+            'is_globaal': is_globaal_gelinkt,
+            'is_afwijkend': is_afwijkend,
+            'oorsprong_naam': globaal.generieke_naam if globaal else None
+        })
+
+    # Haal globals op die NOG NIET in lokaal zitten
+    linked_ids = db.session.query(Lokaal_Artikel.global_id).filter(
+        Lokaal_Artikel.bedrijf_id == bedrijf_id, 
+        Lokaal_Artikel.global_id.isnot(None)
+    )
+    beschikbare_globals = db.session.query(Global_Catalogus).filter(Global_Catalogus.global_id.notin_(linked_ids)).all()
+
+    return render_template('artikelen_beheer.html', artikelen=view_data, beschikbare_globals=beschikbare_globals)
+
+@app.route('/artikelen-beheer/vervang', methods=['POST'])
+def vervang_artikel():
+    if not check_db(): return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    
+    oud_lokaal_id = request.form.get('oud_lokaal_id')
+    nieuw_global_id = request.form.get('nieuw_global_id')
+    
+    oud_artikel = db.session.query(Lokaal_Artikel).get(oud_lokaal_id)
+    if not oud_artikel: return redirect(url_for('artikelen_beheer'))
+
+    # Zoek of maak doel artikel
+    bestaand_doel = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=nieuw_global_id).first()
+    
+    if bestaand_doel:
+        doel_id = bestaand_doel.lokaal_artikel_id
+    else:
+        # Maak nieuw lokaal item aan dat linkt aan global
+        global_item = db.session.query(Global_Catalogus).get(nieuw_global_id)
+        nieuw = Lokaal_Artikel(
+            bedrijf_id=bedrijf_id,
+            global_id=nieuw_global_id,
+            eigen_naam=global_item.generieke_naam,
+            verpakkingseenheid_tekst=oud_artikel.verpakkingseenheid_tekst
+        )
+        db.session.add(nieuw)
+        db.session.flush()
+        doel_id = nieuw.lokaal_artikel_id
+
+    # Migreer voorraad
+    posities = db.session.query(Voorraad_Positie).filter_by(lokaal_artikel_id=oud_lokaal_id).all()
+    for pos in posities:
+        if db.session.query(Voorraad_Positie).filter_by(kast_id=pos.kast_id, lokaal_artikel_id=doel_id).first():
+            db.session.delete(pos) # Voorkom dubbel
+        else:
+            pos.lokaal_artikel_id = doel_id
+            
+    db.session.delete(oud_artikel)
+    db.session.commit()
+    flash('Artikel succesvol gemerged/vervangen.', 'success')
+    return redirect(url_for('artikelen_beheer'))
+
+@app.route('/api/artikel-gebruik/<int:artikel_id>')
+def api_artikel_gebruik(artikel_id):
+    posities = db.session.query(Voorraad_Positie, Kast, Ruimte)\
+        .join(Kast, Voorraad_Positie.kast_id == Kast.kast_id)\
+        .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
+        .filter(Voorraad_Positie.lokaal_artikel_id == artikel_id).all()
+    data = [{'ruimte': r.naam, 'kast': k.naam, 'min': p.trigger_min, 'max': p.target_max} for p, k, r in posities]
+    return jsonify(data)
+
+# === BEHEER ROUTES ===
+
+@app.route('/beheer/catalogus', methods=['GET', 'POST'])
+def beheer_catalogus():
+    """Admin route: Nieuwe GLOBAL artikelen maken en beheren."""
+    if not check_db(): return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+
+    if request.method == 'POST':
+        actie = request.form.get('actie')
+        
+        # 1. Maak een nieuw GLOBAL artikel aan (Master Data)
         if actie == 'nieuw_global':
-            # Global item aanmaken
             nieuw = Global_Catalogus(
                 generieke_naam=request.form.get('naam'),
                 ean_code=request.form.get('ean'),
@@ -197,42 +357,149 @@ def beheer_catalogus():
             db.session.add(nieuw)
             db.session.commit()
             flash('Global item aangemaakt.', 'success')
-            
+        
+        # 2. Koppel (voor het geval de admin dit meteen wil doen)
         elif actie == 'koppel_lokaal':
-            # Koppel global aan lokaal (Assortiment opnemen)
             global_id = request.form.get('global_id')
-            bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=huidig_bedrijf_id, global_id=global_id).first()
-            
+            bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
             if not bestaat:
                 global_item = db.session.query(Global_Catalogus).get(global_id)
                 nieuw_lokaal = Lokaal_Artikel(
-                    bedrijf_id=huidig_bedrijf_id,
+                    bedrijf_id=bedrijf_id,
                     global_id=global_id,
-                    eigen_naam=global_item.generieke_naam, # Default: neem naam over
+                    eigen_naam=global_item.generieke_naam,
                     verpakkingseenheid_tekst="Stuk"
                 )
                 db.session.add(nieuw_lokaal)
                 db.session.commit()
                 flash('Opgenomen in lokaal assortiment.', 'success')
-            else:
-                flash('Dit artikel zit al in je assortiment.', 'warning')
+
+        # 3. Bewerk Global Item
+        elif actie == 'bewerk_global':
+            global_id = request.form.get('global_id')
+            item = db.session.query(Global_Catalogus).get(global_id)
+            if item:
+                item.generieke_naam = request.form.get('naam')
+                item.ean_code = request.form.get('ean')
+                item.categorie = request.form.get('categorie')
                 
+                file = request.files.get('afbeelding')
+                if file:
+                    url = upload_image_to_azure(file)
+                    if url and "ERROR" not in url: item.foto_url = url
+                
+                db.session.commit()
+                
+                # Check usage voor notificatie (soft warning)
+                usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
+                if usage_count > 0:
+                    flash(f'Item bijgewerkt. Let op: dit item wordt gebruikt door {usage_count} lokale bedrijven/artikelen.', 'warning')
+                else:
+                    flash('Item bijgewerkt.', 'success')
+
+        # 4. Verwijder Global Item
+        elif actie == 'verwijder_global':
+            global_id = request.form.get('global_id')
+            
+            # HARD CHECK: Voorkom verwijderen als het gebruikt wordt
+            usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
+            
+            if usage_count > 0:
+                flash(f'Kan item NIET verwijderen: het is in gebruik bij {usage_count} bedrijven/artikelen. Verwijder eerst de koppelingen.', 'danger')
+            else:
+                item = db.session.query(Global_Catalogus).get(global_id)
+                if item:
+                    db.session.delete(item)
+                    db.session.commit()
+                    flash('Item verwijderd uit globale catalogus.', 'success')
+
         return redirect(url_for('beheer_catalogus'))
 
-    # Haal Global items op
+    # Haal alle globals op
     globals = db.session.query(Global_Catalogus).all()
-    
-    # Haal Lokaal assortiment op om te checken wat we al hebben
-    # (Dit is een simpele manier om 'Is_Global_Linked' te checken in de template)
-    lokale_ids = [a.global_id for a in db.session.query(Lokaal_Artikel.global_id).filter_by(bedrijf_id=huidig_bedrijf_id).all()]
-    
+    # Check wat we al hebben om vinkjes te zetten
+    lokale_ids = [a.global_id for a in db.session.query(Lokaal_Artikel.global_id).filter_by(bedrijf_id=bedrijf_id).all()]
+
     return render_template('beheer_catalogus.html', globals=globals, lokale_ids=lokale_ids)
 
-@app.route('/beheer/infra')
+@app.route('/beheer/bedrijf', methods=['GET', 'POST'])
+def beheer_bedrijf():
+    if not check_db(): return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    bedrijf = db.session.query(Bedrijf).get(bedrijf_id)
+    if request.method == 'POST':
+        bedrijf.naam = request.form.get('naam')
+        file = request.files.get('logo')
+        if file:
+            url = upload_image_to_azure(file)
+            if url and "ERROR" not in url: bedrijf.logo_url = url
+        db.session.commit()
+        return redirect(url_for('beheer_bedrijf'))
+    return render_template('beheer_bedrijf.html', bedrijf=bedrijf)
+
+@app.route('/beheer/infra', methods=['GET', 'POST'])
 def beheer_infra():
     if not check_db(): return redirect(url_for('dashboard'))
-    # (Vereenvoudigd voor nu)
-    return render_template('beheer_infra.html', vestigingen=[], ruimtes=[])
+    bedrijf_id = get_huidig_bedrijf_id()
+    if request.method == 'POST':
+        actie = request.form.get('actie')
+        if actie == 'nieuwe_vestiging':
+            db.session.add(Vestiging(bedrijf_id=bedrijf_id, naam=request.form.get('naam'), adres=request.form.get('adres')))
+        elif actie == 'nieuwe_ruimte':
+            db.session.add(Ruimte(bedrijf_id=bedrijf_id, vestiging_id=request.form.get('vestiging_id'), naam=request.form.get('naam'), type_ruimte='KAMER'))
+        elif actie == 'nieuwe_kast':
+            db.session.add(Kast(bedrijf_id=bedrijf_id, ruimte_id=request.form.get('ruimte_id'), naam=request.form.get('naam'), type_opslag=request.form.get('type_opslag')))
+        db.session.commit()
+        return redirect(url_for('beheer_infra'))
+    vestigingen = db.session.query(Vestiging).filter_by(bedrijf_id=bedrijf_id).all()
+    ruimtes = db.session.query(Ruimte).join(Vestiging).filter(Vestiging.bedrijf_id == bedrijf_id).all()
+    kasten = db.session.query(Kast).join(Ruimte).join(Vestiging).filter(Vestiging.bedrijf_id == bedrijf_id).all()
+    return render_template('beheer_infra.html', vestigingen=vestigingen, ruimtes=ruimtes, kasten=kasten)
+
+@app.route('/beheer/verwijder/<type>/<int:id>', methods=['POST'])
+def verwijder_item(type, id):
+    redirect_url = url_for('beheer_infra')
+    try:
+        item = None
+        if type == 'artikel':
+            item = db.session.query(Lokaal_Artikel).get(id)
+            redirect_url = url_for('artikelen_beheer')
+        elif type == 'voorraad':
+            item = db.session.query(Voorraad_Positie).get(id)
+            if item: redirect_url = url_for('assistent_kamer_view', ruimte_id=db.session.query(Kast).get(item.kast_id).ruimte_id)
+        elif type == 'vestiging': item = db.session.query(Vestiging).get(id)
+        elif type == 'ruimte': item = db.session.query(Ruimte).get(id)
+        elif type == 'kast': item = db.session.query(Kast).get(id)
+        
+        if item:
+            db.session.delete(item)
+            db.session.commit()
+            flash(f'{type.capitalize()} verwijderd.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Fout: {e}', 'danger')
+    return redirect(redirect_url)
+
+@app.route('/beheer/update/<type>/<int:id>', methods=['POST'])
+def update_item(type, id):
+    # Generieke update route voor infra
+    try:
+        if type == 'vestiging':
+            item = db.session.query(Vestiging).get(id)
+            item.naam = request.form.get('naam')
+            item.adres = request.form.get('adres')
+        elif type == 'ruimte':
+            item = db.session.query(Ruimte).get(id)
+            item.naam = request.form.get('naam')
+        elif type == 'kast':
+            item = db.session.query(Kast).get(id)
+            item.naam = request.form.get('naam')
+            item.type_opslag = request.form.get('type_opslag')
+        db.session.commit()
+        flash('Item bijgewerkt.', 'success')
+    except Exception as e:
+        flash(f'Fout: {e}', 'danger')
+    return redirect(url_for('beheer_infra'))
 
 if __name__ == '__main__':
     app.run(debug=True)

@@ -1,12 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Catalogus Beheer</h2>
-<p class="text-muted">Beheer hier de centrale database (Global) en koppel artikelen aan je eigen assortiment.</p>
+<div class="mb-3">
+    <a href="{{ url_for('dashboard') }}" class="text-decoration-none text-muted">
+        <i class="bi bi-arrow-left"></i> Terug naar Dashboard
+    </a>
+</div>
+
+<h2>Catalogus Beheer (Admin)</h2>
+<p class="text-muted">Beheer hier de centrale database (Global). Wijzigingen hier hebben effect op <strong>alle</strong> bedrijven die deze artikelen gebruiken.</p>
 
 <div class="row">
     <!-- Links: Nieuw Global Item -->
     <div class="col-md-4">
-        <div class="card shadow-sm">
+        <div class="card shadow-sm mb-3">
             <div class="card-header bg-light">
                 <strong><i class="bi bi-plus-circle"></i> Nieuw Global Item</strong>
             </div>
@@ -39,11 +45,12 @@
         </div>
     </div>
 
-    <!-- Rechts: Lijst met indicatoren -->
+    <!-- Rechts: Lijst met bewerk opties -->
     <div class="col-md-8">
         <div class="card shadow-sm">
-            <div class="card-header bg-light">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
                 <strong><i class="bi bi-list"></i> Beschikbare Items</strong>
+                <span class="badge bg-secondary">{{ globals|length }} Items</span>
             </div>
             <div class="card-body p-0">
                 <table class="table table-hover align-middle mb-0">
@@ -51,8 +58,7 @@
                         <tr>
                             <th style="width: 60px;">Foto</th>
                             <th>Artikel</th>
-                            <th class="text-center">Status</th>
-                            <th class="text-end">Actie</th>
+                            <th class="text-end" style="width: 200px;">Actie</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -67,32 +73,45 @@
                             </td>
                             <td>
                                 <strong>{{ item.generieke_naam }}</strong><br>
-                                <small class="text-muted">{{ item.ean_code or 'Geen EAN' }}</small>
-                            </td>
-                            <td class="text-center">
-                                <!-- SLIMME INDICATOR -->
-                                {% if item.global_id in lokale_ids %}
-                                    <span class="badge bg-success rounded-pill" title="Dit artikel zit in jouw assortiment">
-                                        <i class="bi bi-check-lg"></i> Lokaal
-                                    </span>
-                                {% else %}
-                                    <span class="badge bg-secondary rounded-pill" title="Alleen in Global Catalogus">
-                                        <i class="bi bi-globe"></i> Global
-                                    </span>
-                                {% endif %}
+                                <small class="text-muted">{{ item.ean_code or 'Geen EAN' }} | {{ item.categorie }}</small>
                             </td>
                             <td class="text-end">
-                                {% if item.global_id not in lokale_ids %}
-                                <form method="POST" class="d-inline">
-                                    <input type="hidden" name="actie" value="koppel_lokaal">
-                                    <input type="hidden" name="global_id" value="{{ item.global_id }}">
-                                    <button type="submit" class="btn btn-sm btn-outline-primary">
-                                        <i class="bi bi-plus"></i> Opnemen
+                                <div class="btn-group">
+                                    <!-- Bewerk Knop -->
+                                    <button class="btn btn-sm btn-outline-secondary" 
+                                            data-bs-toggle="modal" 
+                                            data-bs-target="#editGlobalModal"
+                                            data-id="{{ item.global_id }}"
+                                            data-naam="{{ item.generieke_naam }}"
+                                            data-ean="{{ item.ean_code or '' }}"
+                                            data-categorie="{{ item.categorie }}">
+                                        <i class="bi bi-pencil"></i>
                                     </button>
-                                </form>
-                                {% else %}
-                                    <button class="btn btn-sm btn-light" disabled>Reeds gekoppeld</button>
-                                {% endif %}
+
+                                    <!-- Verwijder Knop -->
+                                    <button class="btn btn-sm btn-outline-danger" 
+                                            data-bs-toggle="modal" 
+                                            data-bs-target="#deleteGlobalModal"
+                                            data-id="{{ item.global_id }}"
+                                            data-naam="{{ item.generieke_naam }}">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+
+                                    <!-- Koppel Knop (Als nog niet lokaal) -->
+                                    {% if item.global_id not in lokale_ids %}
+                                    <form method="POST" class="d-inline">
+                                        <input type="hidden" name="actie" value="koppel_lokaal">
+                                        <input type="hidden" name="global_id" value="{{ item.global_id }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Gebruik in mijn bedrijf">
+                                            <i class="bi bi-plus-lg"></i>
+                                        </button>
+                                    </form>
+                                    {% else %}
+                                        <button class="btn btn-sm btn-light text-success" disabled title="Al in gebruik">
+                                            <i class="bi bi-check"></i>
+                                        </button>
+                                    {% endif %}
+                                </div>
                             </td>
                         </tr>
                         {% else %}
@@ -104,4 +123,92 @@
         </div>
     </div>
 </div>
+
+<!-- MODAL: BEWERK GLOBAL -->
+<div class="modal fade" id="editGlobalModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="actie" value="bewerk_global">
+                <input type="hidden" name="global_id" id="editId">
+                <div class="modal-header">
+                    <h5 class="modal-title">Global Item Bewerken</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-warning small">
+                        <i class="bi bi-exclamation-triangle"></i> Let op: Wijzigingen aan dit item zijn direct zichtbaar voor <strong>alle bedrijven</strong> die dit item gebruiken.
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Generieke Naam</label>
+                        <input type="text" name="naam" id="editNaam" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">EAN</label>
+                        <input type="text" name="ean" id="editEan" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Categorie</label>
+                        <select name="categorie" id="editCategorie" class="form-select">
+                            <option value="Algemeen">Algemeen</option>
+                            <option value="Verbandmiddelen">Verbandmiddelen</option>
+                            <option value="Medicatie">Medicatie</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Nieuwe Foto (Optioneel)</label>
+                        <input type="file" name="afbeelding" class="form-control">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuleren</button>
+                    <button type="submit" class="btn btn-primary">Opslaan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: VERWIJDER GLOBAL -->
+<div class="modal fade" id="deleteGlobalModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST">
+                <input type="hidden" name="actie" value="verwijder_global">
+                <input type="hidden" name="global_id" id="deleteId">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">Global Item Verwijderen</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Weet je zeker dat je <strong><span id="deleteNaam"></span></strong> wilt verwijderen uit de globale catalogus?</p>
+                    <p class="text-danger fw-bold">Dit kan niet ongedaan worden gemaakt.</p>
+                    <p class="small text-muted">Als dit item nog ergens in gebruik is bij een bedrijf, zal de verwijdering worden geblokkeerd.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuleren</button>
+                    <button type="submit" class="btn btn-danger">Definitief Verwijderen</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    var editModal = document.getElementById('editGlobalModal')
+    editModal.addEventListener('show.bs.modal', function (event) {
+        var button = event.relatedTarget
+        document.getElementById('editId').value = button.getAttribute('data-id')
+        document.getElementById('editNaam').value = button.getAttribute('data-naam')
+        document.getElementById('editEan').value = button.getAttribute('data-ean')
+        document.getElementById('editCategorie').value = button.getAttribute('data-categorie')
+    })
+
+    var deleteModal = document.getElementById('deleteGlobalModal')
+    deleteModal.addEventListener('show.bs.modal', function (event) {
+        var button = event.relatedTarget
+        document.getElementById('deleteId').value = button.getAttribute('data-id')
+        document.getElementById('deleteNaam').textContent = button.getAttribute('data-naam')
+    })
+</script>
 {% endblock %}

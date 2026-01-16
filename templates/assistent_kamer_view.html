@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <a href="{{ url_for('assistent_kamers') }}" class="text-decoration-none text-muted mb-1 d-block">
+            <i class="bi bi-arrow-left"></i> Terug naar overzicht
+        </a>
+        <h2><i class="bi bi-door-open-fill"></i> {{ ruimte.naam }}</h2>
+    </div>
+    <span class="badge bg-primary fs-6">{{ kasten_data|length }} Opslaglocaties</span>
+</div>
+
+<div class="accordion" id="kastenAccordion">
+    {% for kast, inhoud in kasten_data.items() %}
+    <div class="accordion-item mb-3 shadow-sm border">
+        <h2 class="accordion-header" id="heading{{ kast.kast_id }}">
+            <button class="accordion-button {% if not loop.first %}collapsed{% endif %} fw-bold" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ kast.kast_id }}">
+                <i class="bi bi-box-seam me-2"></i> {{ kast.naam }} 
+                <span class="text-muted fw-normal ms-2 small">({{ kast.type_opslag }})</span>
+            </button>
+        </h2>
+        <div id="collapse{{ kast.kast_id }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}" data-bs-parent="#kastenAccordion">
+            <div class="accordion-body bg-light-subtle">
+                
+                <!-- Inhoud Tabel -->
+                <div class="table-responsive bg-white rounded shadow-sm mb-3">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width:50px;">Foto</th>
+                                <th>Artikel</th>
+                                <th style="width:100px;">Min</th>
+                                <th style="width:100px;">Max</th>
+                                <th style="width:50px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for pos, lokaal, globaal in inhoud %}
+                            <tr>
+                                <td>
+                                    <!-- Foto logic: Positie > Lokaal > Globaal -->
+                                    {% set img = pos.locatie_foto_url or lokaal.foto_url or (globaal and globaal.foto_url) %}
+                                    {% if img %}
+                                        <img src="{{ img }}" height="40" class="rounded border" style="object-fit: cover; width: 40px;">
+                                    {% else %}
+                                        <div class="bg-secondary text-white rounded d-flex justify-content-center align-items-center" style="width:40px; height:40px;">?</div>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <strong>{{ lokaal.eigen_naam }}</strong>
+                                    {% if globaal %}
+                                        <i class="bi bi-globe text-primary small" title="Gekoppeld aan Global Catalogus"></i>
+                                    {% else %}
+                                        <i class="bi bi-hdd-network text-warning small" title="Alleen Lokaal"></i>
+                                    {% endif %}
+                                    <br>
+                                    <small class="text-muted">{{ lokaal.verpakkingseenheid_tekst }}</small>
+                                </td>
+                                
+                                <!-- Inline Edit Form -->
+                                <form action="{{ url_for('update_voorraad_positie', positie_id=pos.positie_id) }}" method="POST">
+                                    <td>
+                                        <input type="number" name="trigger_min" value="{{ pos.trigger_min }}" class="form-control form-control-sm" onchange="this.form.submit()">
+                                    </td>
+                                    <td>
+                                        <input type="number" name="target_max" value="{{ pos.target_max }}" class="form-control form-control-sm" onchange="this.form.submit()">
+                                    </td>
+                                    <td>
+                                        <!-- Verwijder knop (klein) -->
+                                        <button type="submit" formaction="{{ url_for('verwijder_item', type='voorraad', id=pos.positie_id) }}" class="btn btn-link text-danger p-0" onclick="return confirm('Artikel uit deze kast verwijderen?')">
+                                            <i class="bi bi-x-circle"></i>
+                                        </button>
+                                    </td>
+                                </form>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="5" class="text-center text-muted py-3">Deze kast is nog leeg.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Toevoegen aan deze kast -->
+                <form action="{{ url_for('add_to_kast_from_room', kast_id=kast.kast_id) }}" method="POST" class="row g-2 align-items-center">
+                    <div class="col-auto">
+                        <span class="form-text fw-bold">Artikel toevoegen:</span>
+                    </div>
+                    <div class="col-md-4">
+                        <select name="artikel_id" class="form-select form-select-sm" required>
+                            <option value="" selected disabled>Kies artikel...</option>
+                            {% for art in alle_artikelen %}
+                                <option value="{{ art.lokaal_artikel_id }}">
+                                    {{ art.eigen_naam }} 
+                                    {% if art.global_id %}(Global){% else %}(Lokaal){% endif %}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-plus"></i></button>
+                    </div>
+                </form>
+
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

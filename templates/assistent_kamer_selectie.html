@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('dashboard') }}" class="text-decoration-none text-muted">
+        <i class="bi bi-arrow-left"></i> Terug naar Dashboard
+    </a>
+</div>
+
+<h2><i class="bi bi-door-open"></i> Kies een Kamer</h2>
+<p class="text-muted">Selecteer de ruimte waar je de voorraad wilt controleren.</p>
+
+<div class="row">
+    {% for ruimte, vestiging, count in ruimtes %}
+    <div class="col-md-4 mb-3">
+        <div class="card h-100 shadow-sm hover-shadow border-start border-4 border-primary">
+            <div class="card-body">
+                <h5 class="card-title">{{ ruimte.naam }}</h5>
+                <h6 class="card-subtitle mb-2 text-muted">{{ vestiging.naam }}</h6>
+                <p class="card-text text-muted small">Bevat {{ count }} kasten/karren.</p>
+                
+                <a href="{{ url_for('assistent_kamer_view', ruimte_id=ruimte.ruimte_id) }}" class="stretched-link"></a>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="alert alert-info">Nog geen kamers ingericht. Vraag de beheerder om dit te doen.</div>
+    {% endfor %}
+</div>
+{% endblock %}
