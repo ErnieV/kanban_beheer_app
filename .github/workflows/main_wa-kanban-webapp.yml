@@ -54,6 +54,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: python-app
+          path: deploy_artifact
+
+      - name: Validate deploy artifact
+        run: |
+          ls -la deploy_artifact
+          test -f deploy_artifact/app.py
+          test -f deploy_artifact/requirements.txt
+          test -d deploy_artifact/templates
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -68,3 +76,4 @@ jobs:
         with:
           app-name: wa-kanban-webapp
           slot-name: Production
+          package: deploy_artifact

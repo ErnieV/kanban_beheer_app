@@ -1,10 +1,12 @@
 import os
 import uuid
 import urllib.parse
+import socket
 import hmac
 import secrets
 import json
 import datetime
+import requests
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.ext.automap import automap_base
@@ -38,6 +40,11 @@ connect_str = os.environ.get('AZURE_STORAGE_CONNECTION_STRING')
 container_name = os.environ.get('AZURE_CONTAINER_NAME')
 
 API_BASE_URL = os.environ.get('KANBAN_API_BASE_URL', 'https://api.uw-zorginstelling.nl/scan')
+PRINT_SERVICE_URL = os.environ.get('PRINT_SERVICE_URL')
+PRINT_SERVICE_API_KEY = os.environ.get('PRINT_SERVICE_API_KEY')
+PRINT_SERVICE_REQUIRE_API_KEY = os.environ.get('PRINT_SERVICE_REQUIRE_API_KEY', '1') == '1'
+PRINT_CONNECT_TIMEOUT = float(os.environ.get('PRINT_CONNECT_TIMEOUT', '3'))
+PRINT_REQUEST_TIMEOUT = float(os.environ.get('PRINT_REQUEST_TIMEOUT', '10'))
 
 if not all([db_server, db_name, db_user, db_pass]):
     print("WAARSCHUWING: Database configuratie ontbreekt!")
@@ -190,6 +197,107 @@ def create_queue_item(pos, art, kast, ruimte, r_type, bedrijf):
         qr_human_readable=f"POS-{pos.voorraad_positie_id}",
         company_logo_url=bedrijf.logo_url
     )
+
+def _build_print_payload(queue_item):
+    return {
+        "printerId": queue_item.printer_id or "reception-badgy-01",
+        "cardType": queue_item.card_type or "KANBAN_TWO_BIN",
+        "data": {
+            "header": {
+                "text": queue_item.header_text or "",
+                "color": queue_item.header_color or "#3B82F6",
+                "textColor": "#FFFFFF"
+            },
+            "product": {
+                "name": queue_item.product_name or "",
+                "packaging": queue_item.product_packaging or "Stuk",
+                "sku": queue_item.product_sku or "",
+                "imageUrl": queue_item.product_image_url
+            },
+            "company": {
+                "logoUrl": queue_item.company_logo_url
+            },
+            "logistics": {
+                "location": queue_item.location_text or "",
+                "minLevel": int(queue_item.min_level or 0),
+                "maxLevel": int(queue_item.max_level or 0)
+            },
+            "trigger": {
+                "qrCodeValue": queue_item.qr_code_value or "",
+                "humanReadableCode": queue_item.qr_human_readable or ""
+            }
+        },
+        "options": {
+            "orientation": "portrait",
+            "doubleSided": False
+        }
+    }
+
+def _print_service_root_url():
+    if not PRINT_SERVICE_URL:
+        return None
+    parsed = urllib.parse.urlparse(PRINT_SERVICE_URL)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}/"
+
+def _print_service_headers():
+    if PRINT_SERVICE_REQUIRE_API_KEY and not PRINT_SERVICE_API_KEY:
+        return None, "PRINT_SERVICE_API_KEY ontbreekt terwijl API key verplicht is."
+
+    headers = {}
+    if PRINT_SERVICE_API_KEY:
+        headers["X-API-Key"] = PRINT_SERVICE_API_KEY
+    return headers, None
+
+def test_print_service_connectivity():
+    if not PRINT_SERVICE_URL:
+        return False, "PRINT_SERVICE_URL ontbreekt."
+
+    parsed = urllib.parse.urlparse(PRINT_SERVICE_URL)
+    if not parsed.scheme or not parsed.hostname:
+        return False, "PRINT_SERVICE_URL is ongeldig."
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=PRINT_CONNECT_TIMEOUT):
+            pass
+    except OSError as exc:
+        return False, f"Poortcheck mislukt op {parsed.hostname}:{port} ({exc})."
+
+    try:
+        root_url = _print_service_root_url()
+        headers, header_err = _print_service_headers()
+        if header_err:
+            return False, header_err
+        resp = requests.get(root_url, headers=headers, timeout=PRINT_REQUEST_TIMEOUT)
+        if resp.status_code >= 400:
+            return False, f"Service bereikbaar, maar health-check gaf HTTP {resp.status_code}."
+    except requests.RequestException as exc:
+        return False, f"Poort open, maar service health-check faalde ({exc})."
+
+    return True, f"Verbonden met printservice op {parsed.hostname}:{port}."
+
+def send_queue_item_to_print_service(queue_item):
+    if not PRINT_SERVICE_URL:
+        return False, "PRINT_SERVICE_URL ontbreekt."
+
+    payload = _build_print_payload(queue_item)
+    headers, header_err = _print_service_headers()
+    if header_err:
+        return False, header_err
+
+    try:
+        response = requests.post(
+            PRINT_SERVICE_URL,
+            json=payload,
+            headers=headers,
+            timeout=PRINT_REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        return True, None
+    except requests.RequestException as exc:
+        return False, f"Printservice fout: {exc}"
 
 # --- ROUTES ---
 
@@ -423,8 +531,95 @@ def assistent_print_queue():
     queue_items = db.session.query(Print_Queue)\
         .filter(Print_Queue.bedrijf_id == bedrijf_id, Print_Queue.status == 'PENDING')\
         .order_by(Print_Queue.aangemaakt_op.desc()).all()
-        
-    return render_template('assistent_print_queue.html', queue_items=queue_items)
+
+    return render_template(
+        'assistent_print_queue.html',
+        queue_items=queue_items,
+        print_service_url=PRINT_SERVICE_URL
+    )
+
+@app.route('/assistent/print-queue/test-verbinding', methods=['POST'])
+def test_print_verbinding():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    ok, detail = test_print_service_connectivity()
+    if ok:
+        flash(detail, 'success')
+    else:
+        flash(detail, 'danger')
+    return redirect(url_for('assistent_print_queue'))
+
+@app.route('/assistent/print-queue/verstuur/<int:print_id>', methods=['POST'])
+def verstuur_print_opdracht(print_id):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+
+    item = db.session.query(Print_Queue).filter(
+        Print_Queue.print_id == print_id,
+        Print_Queue.bedrijf_id == bedrijf_id,
+        Print_Queue.status == 'PENDING'
+    ).first()
+    if not item:
+        flash("Printopdracht niet gevonden of al verwerkt.", "warning")
+        return redirect(url_for('assistent_print_queue'))
+
+    ok, detail = test_print_service_connectivity()
+    if not ok:
+        flash(detail, 'danger')
+        return redirect(url_for('assistent_print_queue'))
+
+    sent, error_msg = send_queue_item_to_print_service(item)
+    if sent:
+        db.session.delete(item)
+        db.session.commit()
+        flash("Kaartje naar lokale printer gestuurd.", "success")
+    else:
+        flash(error_msg, "danger")
+    return redirect(url_for('assistent_print_queue'))
+
+@app.route('/assistent/print-queue/verstuur-alles', methods=['POST'])
+def verstuur_alle_print_opdrachten():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+
+    items = db.session.query(Print_Queue).filter(
+        Print_Queue.bedrijf_id == bedrijf_id,
+        Print_Queue.status == 'PENDING'
+    ).order_by(Print_Queue.aangemaakt_op.asc()).all()
+
+    if not items:
+        flash("Geen openstaande printopdrachten.", "info")
+        return redirect(url_for('assistent_print_queue'))
+
+    ok, detail = test_print_service_connectivity()
+    if not ok:
+        flash(detail, 'danger')
+        return redirect(url_for('assistent_print_queue'))
+
+    success_count = 0
+    fail_count = 0
+    fail_messages = []
+
+    for item in items:
+        sent, error_msg = send_queue_item_to_print_service(item)
+        if sent:
+            db.session.delete(item)
+            success_count += 1
+        else:
+            fail_count += 1
+            if len(fail_messages) < 3:
+                fail_messages.append(f"ID {item.print_id}: {error_msg}")
+
+    db.session.commit()
+
+    if success_count:
+        flash(f"{success_count} kaartje(s) verstuurd naar lokale printer.", "success")
+    if fail_count:
+        extra = " | ".join(fail_messages)
+        flash(f"{fail_count} opdracht(en) mislukt. {extra}", "danger")
+    return redirect(url_for('assistent_print_queue'))
 
 @app.route('/assistent/print-queue/annuleren/<int:print_id>', methods=['POST'])
 def annuleren_print_opdracht(print_id):

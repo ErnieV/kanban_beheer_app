@@ -8,7 +8,30 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2><i class="bi bi-printer"></i> Print Wachtrij</h2>
-    <span class="badge bg-primary">{{ queue_items|length }} aanvragen</span>
+    <div class="d-flex align-items-center gap-2">
+        <span class="badge bg-primary">{{ queue_items|length }} aanvragen</span>
+        <form action="{{ url_for('test_print_verbinding') }}" method="POST" class="d-inline">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-outline-secondary" title="Check poort en service endpoint">
+                <i class="bi bi-wifi"></i> Test verbinding
+            </button>
+        </form>
+        <form action="{{ url_for('verstuur_alle_print_opdrachten') }}" method="POST" class="d-inline" onsubmit="return confirm('Alle openstaande opdrachten naar de lokale printer sturen?');">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-success">
+                <i class="bi bi-send-check"></i> Verstuur Alles
+            </button>
+        </form>
+    </div>
+</div>
+
+<div class="alert alert-light border small">
+    <strong>Printservice:</strong>
+    {% if print_service_url %}
+        <span class="font-monospace">{{ print_service_url }}</span>
+    {% else %}
+        <span class="text-danger">Niet geconfigureerd. Zet <code>PRINT_SERVICE_URL</code> in de app settings.</span>
+    {% endif %}
 </div>
 
 <div class="card shadow-sm">
@@ -98,6 +121,13 @@
                         <!-- ACTIES -->
                         <td class="text-end">
                             <div class="btn-group-vertical btn-group-sm w-100">
+                                <form action="{{ url_for('verstuur_print_opdracht', print_id=item.print_id) }}" method="POST" class="mb-1">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-success w-100" title="Stuur direct naar lokale printer">
+                                        <i class="bi bi-send"></i> Print
+                                    </button>
+                                </form>
+
                                 <!-- DETAILS KNOP (Voorbeeld) -->
                                 <button type="button" class="btn btn-outline-info mb-1" 
                                         title="Bekijk voorbeeld"
