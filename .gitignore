@@ -4,5 +4,9 @@ obj/
 local.settings.json
 *.user
 .venv/
+venv/
 __pycache__/
 *.pyc
+.env
+keys
+.DS_Store

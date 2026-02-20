@@ -20,6 +20,7 @@
         <div class="card-body">
             <p class="small text-muted">Gebruik dit alleen als het artikel niet in de wereldwijde catalogus staat.</p>
             <form method="POST" enctype="multipart/form-data" class="row g-3">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="actie" value="nieuw_lokaal">
                 <div class="col-md-5">
                     <label class="form-label">Naam</label>
@@ -128,6 +129,7 @@
 
                                     <!-- Verwijder Knop -->
                                     <form action="{{ url_for('verwijder_item', type='artikel', id=item.obj.lokaal_artikel_id) }}" method="POST" class="d-inline" onsubmit="return confirm('Weet je zeker dat je dit artikel wilt verwijderen uit het assortiment?');">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                         <button class="btn btn-sm btn-outline-danger" title="Verwijderen"><i class="bi bi-trash"></i></button>
                                     </form>
                                 </div>
@@ -172,6 +174,7 @@
                     <td>{{ item.ean_code or '-' }}</td>
                     <td class="text-end">
                         <form method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="actie" value="koppel_global">
                             <input type="hidden" name="global_id" value="{{ item.global_id }}">
                             <button type="submit" class="btn btn-sm btn-primary w-100">
@@ -193,6 +196,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <div class="modal-header">
                     <h5 class="modal-title">Artikel Bewerken</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -232,6 +236,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <form action="{{ url_for('vervang_artikel') }}" method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <div class="modal-header">
                     <h5 class="modal-title">Artikel Samenvoegen</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>

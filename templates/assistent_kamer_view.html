@@ -25,6 +25,7 @@
                 
                 <!-- BATCH PRINT KNOP -->
                 <form action="{{ url_for('kanban_aanvragen_kast', kast_id=kast.kast_id) }}" method="POST" class="ms-3" onsubmit="return confirm('Wil je kaartjes aanvragen voor ALLE artikelen in deze kast?');">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-sm btn-outline-dark" title="Print alle kaartjes voor deze kast">
                         <i class="bi bi-printer-fill"></i> <span class="d-none d-md-inline">Alles Printen</span>
                     </button>
@@ -68,6 +69,7 @@
                                 </td>
                                 
                                 <form action="{{ url_for('update_voorraad_positie', voorraad_positie_id=pos.voorraad_positie_id) }}" method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                     <td>
                                         <input type="number" name="trigger_min" value="{{ pos.trigger_min }}" class="form-control form-control-sm" onchange="this.form.submit()">
                                     </td>
@@ -97,6 +99,7 @@
                 </div>
 
                 <form action="{{ url_for('add_to_kast_from_room', kast_id=kast.kast_id) }}" method="POST" class="row g-2 align-items-center">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <div class="col-auto">
                         <span class="form-text fw-bold">Artikel toevoegen:</span>
                     </div>

@@ -20,6 +20,7 @@
         <div class="row">
             <div class="col-md-4">
                 <form method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="actie" value="nieuw_ruimte_type">
                     <div class="input-group mb-2">
                         <input type="text" name="naam" class="form-control" placeholder="Type (bv. Artsenkamer)" required>
@@ -34,6 +35,7 @@
                         <div class="badge rounded-pill d-flex align-items-center p-2" style="background-color: {{ rt.kleur_hex|default('#3B82F6') }}; color: white; border: 1px solid rgba(0,0,0,0.1);">
                             <span class="me-2">{{ rt.naam }}</span>
                             <form action="{{ url_for('verwijder_item', type='ruimte_type', id=rt.ruimte_type_id) }}" method="POST" class="m-0 p-0 d-inline-block">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn-close btn-close-white" aria-label="Close" style="font-size: 0.5rem;" onclick="return confirm('Type verwijderen?');"></button>
                             </form>
                         </div>
@@ -57,6 +59,7 @@
             <div class="card-body bg-light-subtle">
                 <!-- Nieuwe Vestiging -->
                 <form action="{{ url_for('beheer_infra') }}" method="POST" class="mb-4">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="actie" value="nieuwe_vestiging">
                     <div class="input-group input-group-sm mb-2">
                         <input type="text" name="naam" class="form-control" placeholder="Naam Vestiging" required>
@@ -91,6 +94,7 @@
                                     <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
                                 </button>
                                 <form action="{{ url_for('verwijder_item', type='vestiging', id=vestiging.vestiging_id) }}" method="POST" class="d-inline" onsubmit="return confirm('Weet je zeker?');">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-sm {{ 'btn-light text-danger' if is_active else 'btn-outline-danger' }} py-0 px-1">
                                         <i class="bi bi-trash" style="font-size: 0.8rem;"></i>
                                     </button>
@@ -114,6 +118,7 @@
             <div class="card-body bg-light-subtle">
                 <!-- Nieuwe Ruimte -->
                 <form action="{{ url_for('beheer_infra') }}" method="POST" class="mb-4">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="actie" value="nieuwe_ruimte">
                     <input type="hidden" name="vestiging_id" value="{{ active_vestiging_id }}">
                     
@@ -169,6 +174,7 @@
                                     <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
                                 </button>
                                 <form action="{{ url_for('verwijder_item', type='ruimte', id=ruimte.ruimte_id) }}" method="POST" class="d-inline" onsubmit="return confirm('Verwijderen?');">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="vestiging_id" value="{{ active_vestiging_id }}">
                                     <button type="submit" class="btn btn-sm {{ 'btn-light text-danger' if is_active_r else 'btn-outline-danger' }} py-0 px-1">
                                         <i class="bi bi-trash" style="font-size: 0.8rem;"></i>
@@ -198,6 +204,7 @@
             <div class="card-body bg-light-subtle">
                 <!-- Nieuwe Kast -->
                 <form action="{{ url_for('beheer_infra') }}" method="POST" class="mb-4">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="actie" value="nieuwe_kast">
                     <input type="hidden" name="ruimte_id" value="{{ active_ruimte_id }}">
                     <!-- Behoud vestiging ID voor redirect -->
@@ -231,6 +238,7 @@
                                 <i class="bi bi-pencil" style="font-size: 0.8rem;"></i>
                             </button>
                             <form action="{{ url_for('verwijder_item', type='kast', id=kast.kast_id) }}" method="POST" onsubmit="return confirm('Verwijderen?');">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                 <input type="hidden" name="vestiging_id" value="{{ active_vestiging_id }}">
                                 <input type="hidden" name="ruimte_id" value="{{ active_ruimte_id }}">
                                 <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">
@@ -252,13 +260,16 @@
 </div>
 
 <!-- MODALS -->
-<div class="modal fade" id="editVestigingModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form id="editVestigingForm" method="POST"><div class="modal-header"><h5 class="modal-title">Vestiging Bewerken</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Naam</label><input type="text" name="naam" id="editVestigingNaam" class="form-control" required></div><div class="mb-3"><label class="form-label">Adres</label><input type="text" name="adres" id="editVestigingAdres" class="form-control"></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Opslaan</button></div></form></div></div></div>
+<div class="modal fade" id="editVestigingModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form id="editVestigingForm" method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="modal-header"><h5 class="modal-title">Vestiging Bewerken</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Naam</label><input type="text" name="naam" id="editVestigingNaam" class="form-control" required></div><div class="mb-3"><label class="form-label">Adres</label><input type="text" name="adres" id="editVestigingAdres" class="form-control"></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Opslaan</button></div></form></div></div></div>
 
-<div class="modal fade" id="editRuimteModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form id="editRuimteForm" method="POST"><div class="modal-header"><h5 class="modal-title">Ruimte Bewerken</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Nummer</label><input type="text" name="nummer" id="editRuimteNummer" class="form-control"></div><div class="mb-3"><label class="form-label">Naam</label><input type="text" name="naam" id="editRuimteNaam" class="form-control" required></div>
+<div class="modal fade" id="editRuimteModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form id="editRuimteForm" method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="modal-header"><h5 class="modal-title">Ruimte Bewerken</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Nummer</label><input type="text" name="nummer" id="editRuimteNummer" class="form-control"></div><div class="mb-3"><label class="form-label">Naam</label><input type="text" name="naam" id="editRuimteNaam" class="form-control" required></div>
 <div class="mb-3"><label class="form-label">Type</label><select name="ruimte_type_id" id="editRuimteType" class="form-select">{% for rt in ruimte_types %}<option value="{{ rt.ruimte_type_id }}">{{ rt.naam }}</option>{% endfor %}</select></div>
 </div><div class="modal-footer"><button type="submit" class="btn btn-primary">Opslaan</button></div></form></div></div></div>
 
-<div class="modal fade" id="editKastModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form id="editKastForm" method="POST"><div class="modal-header"><h5 class="modal-title">Kast Bewerken</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Naam</label><input type="text" name="naam" id="editKastNaam" class="form-control" required></div><div class="mb-3"><label class="form-label">Type Opslag</label><select name="type_opslag" id="editKastType" class="form-select"><option value="GRIJP">Grijpvoorraad</option><option value="BULK">Bulkvoorraad</option></select></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Opslaan</button></div></form></div></div></div>
+<div class="modal fade" id="editKastModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form id="editKastForm" method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="modal-header"><h5 class="modal-title">Kast Bewerken</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Naam</label><input type="text" name="naam" id="editKastNaam" class="form-control" required></div><div class="mb-3"><label class="form-label">Type Opslag</label><select name="type_opslag" id="editKastType" class="form-select"><option value="GRIJP">Grijpvoorraad</option><option value="BULK">Bulkvoorraad</option></select></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Opslaan</button></div></form></div></div></div>
 
 <script>
     var editVestigingModal = document.getElementById('editVestigingModal')

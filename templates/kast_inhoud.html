@@ -31,6 +31,7 @@
                 </div>
                 
                 <form method="POST" enctype="multipart/form-data" class="row g-3">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <div class="col-12">
                         <label class="form-label small fw-bold text-muted text-uppercase">Selecteer Artikel</label>
                         <select name="artikel_id" class="form-select shadow-sm" required>

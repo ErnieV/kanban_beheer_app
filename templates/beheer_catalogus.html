@@ -18,6 +18,7 @@
             </div>
             <div class="card-body">
                 <form method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="actie" value="nieuw_global">
                     <div class="mb-3">
                         <label class="form-label">Naam</label>
@@ -100,6 +101,7 @@
                                     <!-- Koppel Knop (Als nog niet lokaal) -->
                                     {% if item.global_id not in lokale_ids %}
                                     <form method="POST" class="d-inline">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                         <input type="hidden" name="actie" value="koppel_lokaal">
                                         <input type="hidden" name="global_id" value="{{ item.global_id }}">
                                         <button type="submit" class="btn btn-sm btn-outline-primary" title="Gebruik in mijn bedrijf">
@@ -129,6 +131,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="actie" value="bewerk_global">
                 <input type="hidden" name="global_id" id="editId">
                 <div class="modal-header">
@@ -174,6 +177,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="actie" value="verwijder_global">
                 <input type="hidden" name="global_id" id="deleteId">
                 <div class="modal-header bg-danger text-white">

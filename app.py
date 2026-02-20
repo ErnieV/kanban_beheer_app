@@ -1,9 +1,11 @@
 import os
 import uuid
 import urllib.parse
+import hmac
+import secrets
 import json
 import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.exc import IntegrityError
@@ -16,7 +18,16 @@ from azure.storage.blob import BlobServiceClient
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'super_geheim_sleutel_123')
+secret_key = os.environ.get('SECRET_KEY')
+if not secret_key:
+    raise RuntimeError("SECRET_KEY ontbreekt. Stel SECRET_KEY in via environment variabele.")
+if len(secret_key) < 32:
+    raise RuntimeError("SECRET_KEY moet minimaal 32 tekens lang zijn.")
+app.secret_key = secret_key
+debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0' if debug_mode else '1') == '1'
 
 # --- CONFIGURATIE ---
 db_server = os.environ.get('DB_SERVER')
@@ -84,8 +95,8 @@ def inject_context():
         return dict(huidig_bedrijf=None, alle_bedrijven=[])
     
     # Huidig bedrijf ophalen
-    bedrijf_id = session.get('bedrijf_id', 1)
-    bedrijf = db.session.query(Bedrijf).get(bedrijf_id)
+    bedrijf_id = get_huidig_bedrijf_id()
+    bedrijf = db.session.query(Bedrijf).filter(Bedrijf.bedrijf_id == bedrijf_id).first() if bedrijf_id else None
     
     # NIEUW: Alle bedrijven ophalen voor de selector in de navbar
     alle_bedrijven = db.session.query(Bedrijf).order_by(Bedrijf.naam).all()
@@ -93,13 +104,52 @@ def inject_context():
     return dict(huidig_bedrijf=bedrijf, alle_bedrijven=alle_bedrijven)
 
 def get_huidig_bedrijf_id():
-    return session.get('bedrijf_id', 1)
+    bedrijf_id = session.get('bedrijf_id')
+    if not db_operational or not Bedrijf:
+        return bedrijf_id
+
+    if bedrijf_id:
+        bedrijf = db.session.query(Bedrijf).filter(Bedrijf.bedrijf_id == bedrijf_id).first()
+        if bedrijf:
+            return bedrijf_id
+
+    eerste = db.session.query(Bedrijf).order_by(Bedrijf.bedrijf_id).first()
+    if eerste:
+        session['bedrijf_id'] = eerste.bedrijf_id
+        return eerste.bedrijf_id
+    return None
 
 def check_db():
     if not db_operational:
         flash("Geen verbinding met de database.", 'danger')
         return False
     return True
+
+def _pk_name(model):
+    return next(iter(model.__table__.primary_key.columns)).name
+
+def get_scoped_item(model, item_id, bedrijf_id):
+    query = db.session.query(model).filter(getattr(model, _pk_name(model)) == item_id)
+    if hasattr(model, 'bedrijf_id'):
+        query = query.filter(model.bedrijf_id == bedrijf_id)
+    return query.first()
+
+def generate_csrf_token():
+    token = session.get('_csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['_csrf_token'] = token
+    return token
+
+app.jinja_env.globals['csrf_token'] = generate_csrf_token
+
+@app.before_request
+def csrf_protect():
+    if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        expected = session.get('_csrf_token')
+        submitted = request.form.get('_csrf_token') or request.headers.get('X-CSRFToken')
+        if not expected or not submitted or not hmac.compare_digest(expected, submitted):
+            abort(400, description="CSRF token ontbreekt of is ongeldig.")
 
 def upload_image_to_azure(file):
     if not file or file.filename == '': return None
@@ -163,6 +213,12 @@ def dashboard():
 
 @app.route('/switch-bedrijf/<int:bedrijf_id>')
 def switch_bedrijf(bedrijf_id):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bestaat = db.session.query(Bedrijf).filter(Bedrijf.bedrijf_id == bedrijf_id).first()
+    if not bestaat:
+        flash('Bedrijf niet gevonden.', 'warning')
+        return redirect(url_for('dashboard'))
     session['bedrijf_id'] = bedrijf_id
     flash('Bedrijf gewijzigd.', 'info')
     return redirect(url_for('dashboard'))
@@ -205,7 +261,7 @@ def assistent_kamers():
             .order_by(Vestiging.naam, Ruimte.nummer, Ruimte.naam).all() 
         ruimtes_data = []
         for ruimte, vestiging in ruimtes_query:
-            count = db.session.query(Kast).filter_by(ruimte_id=ruimte.ruimte_id).count()
+            count = db.session.query(Kast).filter_by(ruimte_id=ruimte.ruimte_id, bedrijf_id=bedrijf_id).count()
             ruimtes_data.append((ruimte, vestiging, count))
         return render_template('assistent_kamer_selectie.html', ruimtes=ruimtes_data)
     except Exception as e:
@@ -217,20 +273,27 @@ def assistent_kamer_view(ruimte_id):
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
     
-    ruimte = db.session.query(Ruimte).outerjoin(Ruimte_Type).filter(Ruimte.ruimte_id == ruimte_id).first()
+    ruimte = db.session.query(Ruimte).filter(Ruimte.ruimte_id == ruimte_id, Ruimte.bedrijf_id == bedrijf_id).first()
+    if not ruimte:
+        flash('Ruimte niet gevonden of geen toegang.', 'warning')
+        return redirect(url_for('assistent_kamers'))
+
     if ruimte.ruimte_type_id:
-        rt = db.session.query(Ruimte_Type).get(ruimte.ruimte_type_id)
-        ruimte.kleur_hex = rt.kleur_hex
+        rt = db.session.query(Ruimte_Type).filter(
+            Ruimte_Type.ruimte_type_id == ruimte.ruimte_type_id,
+            Ruimte_Type.bedrijf_id == bedrijf_id
+        ).first()
+        ruimte.kleur_hex = rt.kleur_hex if rt else None
     else:
         ruimte.kleur_hex = None
 
-    kasten_in_kamer = db.session.query(Kast).filter_by(ruimte_id=ruimte_id).all()
+    kasten_in_kamer = db.session.query(Kast).filter_by(ruimte_id=ruimte_id, bedrijf_id=bedrijf_id).all()
     kasten_data = {}
     for kast in kasten_in_kamer:
         inhoud = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus)\
             .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
             .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
-            .filter(Voorraad_Positie.kast_id == kast.kast_id)\
+            .filter(Voorraad_Positie.kast_id == kast.kast_id, Voorraad_Positie.bedrijf_id == bedrijf_id)\
             .all()
         kasten_data[kast] = inhoud
     alle_artikelen = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id).order_by(Lokaal_Artikel.eigen_naam).all()
@@ -238,21 +301,40 @@ def assistent_kamer_view(ruimte_id):
 
 @app.route('/assistent/update-voorraad/<int:voorraad_positie_id>', methods=['POST'])
 def update_voorraad_positie(voorraad_positie_id):
-    positie = db.session.query(Voorraad_Positie).get(voorraad_positie_id)
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    positie = get_scoped_item(Voorraad_Positie, voorraad_positie_id, bedrijf_id)
+    if not positie:
+        flash('Voorraadpositie niet gevonden of geen toegang.', 'warning')
+        return redirect(url_for('assistent_kamers'))
+
     if positie:
         positie.trigger_min = request.form.get('trigger_min')
         positie.target_max = request.form.get('target_max')
         db.session.commit()
         flash('Voorraadniveaus bijgewerkt.', 'success')
-    kast = db.session.query(Kast).get(positie.kast_id)
+    kast = get_scoped_item(Kast, positie.kast_id, bedrijf_id)
+    if not kast:
+        return redirect(url_for('assistent_kamers'))
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
 @app.route('/assistent/kast/<int:kast_id>/toevoegen', methods=['POST'])
 def add_to_kast_from_room(kast_id):
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
-    artikel_id = request.form.get('artikel_id')
-    bestaat = db.session.query(Voorraad_Positie).filter_by(kast_id=kast_id, lokaal_artikel_id=artikel_id).first()
+    artikel_id = request.form.get('artikel_id', type=int)
+    kast = get_scoped_item(Kast, kast_id, bedrijf_id)
+    artikel = get_scoped_item(Lokaal_Artikel, artikel_id, bedrijf_id) if artikel_id else None
+    if not kast or not artikel:
+        flash('Ongeldige kast of artikelkeuze.', 'warning')
+        return redirect(url_for('assistent_kamers'))
+
+    bestaat = db.session.query(Voorraad_Positie).filter_by(
+        bedrijf_id=bedrijf_id,
+        kast_id=kast_id,
+        lokaal_artikel_id=artikel_id
+    ).first()
     if not bestaat:
         nieuw = Voorraad_Positie(
             bedrijf_id=bedrijf_id, kast_id=kast_id, lokaal_artikel_id=artikel_id,
@@ -265,11 +347,13 @@ def add_to_kast_from_room(kast_id):
         flash('Artikel toegevoegd.', 'success')
     else:
         flash('Artikel zit al in de kast.', 'warning')
-    kast = db.session.query(Kast).get(kast_id)
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
 @app.route('/assistent/kanban/aanvragen/enkel/<int:voorraad_positie_id>', methods=['POST'])
 def kanban_aanvragen_enkel(voorraad_positie_id):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
     try:
         result = db.session.query(Voorraad_Positie, Lokaal_Artikel, Kast, Ruimte, Ruimte_Type, Bedrijf)\
             .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
@@ -277,7 +361,10 @@ def kanban_aanvragen_enkel(voorraad_positie_id):
             .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
             .outerjoin(Ruimte_Type, Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id)\
             .join(Bedrijf, Voorraad_Positie.bedrijf_id == Bedrijf.bedrijf_id)\
-            .filter(Voorraad_Positie.voorraad_positie_id == voorraad_positie_id).first()
+            .filter(
+                Voorraad_Positie.voorraad_positie_id == voorraad_positie_id,
+                Voorraad_Positie.bedrijf_id == bedrijf_id
+            ).first()
 
         if not result:
             flash("Artikel niet gevonden.", "danger")
@@ -297,6 +384,9 @@ def kanban_aanvragen_enkel(voorraad_positie_id):
 
 @app.route('/assistent/kanban/aanvragen/kast/<int:kast_id>', methods=['POST'])
 def kanban_aanvragen_kast(kast_id):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
     try:
         results = db.session.query(Voorraad_Positie, Lokaal_Artikel, Kast, Ruimte, Ruimte_Type, Bedrijf)\
             .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
@@ -304,7 +394,7 @@ def kanban_aanvragen_kast(kast_id):
             .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
             .outerjoin(Ruimte_Type, Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id)\
             .join(Bedrijf, Voorraad_Positie.bedrijf_id == Bedrijf.bedrijf_id)\
-            .filter(Voorraad_Positie.kast_id == kast_id).all()
+            .filter(Voorraad_Positie.kast_id == kast_id, Voorraad_Positie.bedrijf_id == bedrijf_id).all()
 
         if not results:
             flash("Deze kast is leeg.", "warning")
@@ -338,7 +428,13 @@ def assistent_print_queue():
 
 @app.route('/assistent/print-queue/annuleren/<int:print_id>', methods=['POST'])
 def annuleren_print_opdracht(print_id):
-    item = db.session.query(Print_Queue).get(print_id)
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    item = db.session.query(Print_Queue).filter(
+        Print_Queue.print_id == print_id,
+        Print_Queue.bedrijf_id == bedrijf_id
+    ).first()
     if item and item.status == 'PENDING':
         db.session.delete(item)
         db.session.commit()
@@ -362,17 +458,17 @@ def artikelen_beheer():
             db.session.commit()
             flash('Lokaal artikel aangemaakt.', 'success')
         elif actie == 'koppel_global':
-            global_id = request.form.get('global_id')
-            global_item = db.session.query(Global_Catalogus).get(global_id)
+            global_id = request.form.get('global_id', type=int)
+            global_item = db.session.query(Global_Catalogus).filter(Global_Catalogus.global_id == global_id).first()
             bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
-            if not bestaat:
+            if global_item and not bestaat:
                 nieuw = Lokaal_Artikel(bedrijf_id=bedrijf_id, global_id=global_id, eigen_naam=global_item.generieke_naam, verpakkingseenheid_tekst='Stuk')
                 db.session.add(nieuw)
                 db.session.commit()
                 flash('Gekoppeld.', 'success')
         elif actie == 'bewerk_artikel':
-            artikel_id = request.form.get('artikel_id')
-            artikel = db.session.query(Lokaal_Artikel).get(artikel_id)
+            artikel_id = request.form.get('artikel_id', type=int)
+            artikel = get_scoped_item(Lokaal_Artikel, artikel_id, bedrijf_id)
             if artikel:
                 artikel.eigen_naam = request.form.get('naam')
                 artikel.verpakkingseenheid_tekst = request.form.get('eenheid')
@@ -394,23 +490,30 @@ def artikelen_beheer():
 def vervang_artikel():
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
-    oud_lokaal_id = request.form.get('oud_lokaal_id')
-    nieuw_global_id = request.form.get('nieuw_global_id')
+    oud_lokaal_id = request.form.get('oud_lokaal_id', type=int)
+    nieuw_global_id = request.form.get('nieuw_global_id', type=int)
     
-    oud_artikel = db.session.query(Lokaal_Artikel).get(oud_lokaal_id)
+    oud_artikel = get_scoped_item(Lokaal_Artikel, oud_lokaal_id, bedrijf_id)
+    if not oud_artikel:
+        flash('Bronartikel niet gevonden of geen toegang.', 'warning')
+        return redirect(url_for('artikelen_beheer'))
+
     bestaand_doel = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=nieuw_global_id).first()
     
     if bestaand_doel: doel_id = bestaand_doel.lokaal_artikel_id
     else:
-        g_item = db.session.query(Global_Catalogus).get(nieuw_global_id)
+        g_item = db.session.query(Global_Catalogus).filter(Global_Catalogus.global_id == nieuw_global_id).first()
+        if not g_item:
+            flash('Doelartikel uit catalogus niet gevonden.', 'warning')
+            return redirect(url_for('artikelen_beheer'))
         nieuw = Lokaal_Artikel(bedrijf_id=bedrijf_id, global_id=nieuw_global_id, eigen_naam=g_item.generieke_naam, verpakkingseenheid_tekst=oud_artikel.verpakkingseenheid_tekst)
         db.session.add(nieuw)
         db.session.flush()
         doel_id = nieuw.lokaal_artikel_id
 
-    posities = db.session.query(Voorraad_Positie).filter_by(lokaal_artikel_id=oud_lokaal_id).all()
+    posities = db.session.query(Voorraad_Positie).filter_by(bedrijf_id=bedrijf_id, lokaal_artikel_id=oud_lokaal_id).all()
     for pos in posities:
-        if db.session.query(Voorraad_Positie).filter_by(kast_id=pos.kast_id, lokaal_artikel_id=doel_id).first(): db.session.delete(pos)
+        if db.session.query(Voorraad_Positie).filter_by(bedrijf_id=bedrijf_id, kast_id=pos.kast_id, lokaal_artikel_id=doel_id).first(): db.session.delete(pos)
         else: pos.lokaal_artikel_id = doel_id
     
     if oud_artikel: db.session.delete(oud_artikel)
@@ -420,7 +523,20 @@ def vervang_artikel():
 
 @app.route('/api/artikel-gebruik/<int:artikel_id>')
 def api_artikel_gebruik(artikel_id):
-    posities = db.session.query(Voorraad_Positie, Kast, Ruimte).join(Kast, Voorraad_Positie.kast_id == Kast.kast_id).join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id).filter(Voorraad_Positie.lokaal_artikel_id == artikel_id).all()
+    if not check_db():
+        return jsonify([])
+    bedrijf_id = get_huidig_bedrijf_id()
+    artikel = get_scoped_item(Lokaal_Artikel, artikel_id, bedrijf_id)
+    if not artikel:
+        return jsonify([])
+
+    posities = db.session.query(Voorraad_Positie, Kast, Ruimte)\
+        .join(Kast, Voorraad_Positie.kast_id == Kast.kast_id)\
+        .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
+        .filter(
+            Voorraad_Positie.lokaal_artikel_id == artikel_id,
+            Voorraad_Positie.bedrijf_id == bedrijf_id
+        ).all()
     return jsonify([{'ruimte': r.naam, 'kast': k.naam, 'min': p.trigger_min, 'max': p.target_max} for p, k, r in posities])
 
 @app.route('/beheer/catalogus', methods=['GET', 'POST'])
@@ -439,16 +555,17 @@ def beheer_catalogus():
             db.session.commit()
             flash('Global item gemaakt.', 'success')
         elif actie == 'koppel_lokaal':
-            global_id = request.form.get('global_id')
-            global_item = db.session.query(Global_Catalogus).get(global_id)
+            global_id = request.form.get('global_id', type=int)
+            global_item = db.session.query(Global_Catalogus).filter(Global_Catalogus.global_id == global_id).first()
             bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
-            if not bestaat:
+            if global_item and not bestaat:
                 nieuw = Lokaal_Artikel(bedrijf_id=bedrijf_id, global_id=global_id, eigen_naam=global_item.generieke_naam, verpakkingseenheid_tekst="Stuk")
                 db.session.add(nieuw)
                 db.session.commit()
                 flash('Opgenomen in lokaal assortiment.', 'success')
         elif actie == 'bewerk_global':
-            item = db.session.query(Global_Catalogus).get(request.form.get('global_id'))
+            global_id = request.form.get('global_id', type=int)
+            item = db.session.query(Global_Catalogus).filter(Global_Catalogus.global_id == global_id).first()
             if item:
                 item.generieke_naam = request.form.get('naam')
                 item.ean_code = request.form.get('ean')
@@ -460,12 +577,12 @@ def beheer_catalogus():
                 db.session.commit()
                 flash('Global item bijgewerkt', 'success')
         elif actie == 'verwijder_global':
-            global_id = request.form.get('global_id')
+            global_id = request.form.get('global_id', type=int)
             usage_count = db.session.query(Lokaal_Artikel).filter_by(global_id=global_id).count()
             if usage_count > 0:
                 flash(f'Kan item NIET verwijderen: in gebruik.', 'danger')
             else:
-                item = db.session.query(Global_Catalogus).get(global_id)
+                item = db.session.query(Global_Catalogus).filter(Global_Catalogus.global_id == global_id).first()
                 if item:
                     db.session.delete(item)
                     db.session.commit()
@@ -480,7 +597,10 @@ def beheer_catalogus():
 def beheer_bedrijf():
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
-    bedrijf = db.session.query(Bedrijf).get(bedrijf_id)
+    bedrijf = db.session.query(Bedrijf).filter(Bedrijf.bedrijf_id == bedrijf_id).first()
+    if not bedrijf:
+        flash('Bedrijf niet gevonden.', 'warning')
+        return redirect(url_for('dashboard'))
     if request.method == 'POST':
         bedrijf.naam = request.form.get('naam')
         file = request.files.get('logo')
@@ -508,18 +628,26 @@ def beheer_infra():
                 db.session.add(Ruimte_Type(bedrijf_id=bedrijf_id, naam=request.form.get('naam'), kleur_hex=request.form.get('kleur')))
                 db.session.commit()
             elif actie == 'nieuwe_ruimte':
-                vest_id = request.form.get('vestiging_id')
+                vest_id = request.form.get('vestiging_id', type=int)
+                vestiging = get_scoped_item(Vestiging, vest_id, bedrijf_id)
+                if not vestiging:
+                    flash('Vestiging niet gevonden of geen toegang.', 'warning')
+                    return redirect(url_for('beheer_infra'))
                 nieuwe_ruimte = Ruimte(bedrijf_id=bedrijf_id, vestiging_id=vest_id, naam=request.form.get('naam'), nummer=request.form.get('nummer'), ruimte_type_id=request.form.get('ruimte_type_id'), type_ruimte='KAMER')
                 db.session.add(nieuwe_ruimte)
                 db.session.flush()
-                kopieer_id = request.form.get('kopieer_van_ruimte_id')
+                kopieer_id = request.form.get('kopieer_van_ruimte_id', type=int)
                 if kopieer_id:
-                    bron_kasten = db.session.query(Kast).filter_by(ruimte_id=kopieer_id).all()
+                    bron_ruimte = get_scoped_item(Ruimte, kopieer_id, bedrijf_id)
+                    if bron_ruimte:
+                        bron_kasten = db.session.query(Kast).filter_by(ruimte_id=kopieer_id, bedrijf_id=bedrijf_id).all()
+                    else:
+                        bron_kasten = []
                     for bron_kast in bron_kasten:
                         nieuwe_kast = Kast(bedrijf_id=bedrijf_id, ruimte_id=nieuwe_ruimte.ruimte_id, naam=bron_kast.naam, type_opslag=bron_kast.type_opslag)
                         db.session.add(nieuwe_kast)
                         db.session.flush()
-                        posities = db.session.query(Voorraad_Positie).filter_by(kast_id=bron_kast.kast_id).all()
+                        posities = db.session.query(Voorraad_Positie).filter_by(kast_id=bron_kast.kast_id, bedrijf_id=bedrijf_id).all()
                         for pos in posities:
                             nieuw_pos = Voorraad_Positie(bedrijf_id=bedrijf_id, kast_id=nieuwe_kast.kast_id, lokaal_artikel_id=pos.lokaal_artikel_id, strategie=pos.strategie, trigger_min=pos.trigger_min, target_max=pos.target_max, locatie_foto_url=pos.locatie_foto_url)
                             db.session.add(nieuw_pos)
@@ -528,8 +656,11 @@ def beheer_infra():
                 db.session.commit()
                 return redirect(url_for('beheer_infra', vestiging_id=vest_id))
             elif actie == 'nieuwe_kast':
-                ruimte_id = request.form.get('ruimte_id')
-                ruimte = db.session.query(Ruimte).get(ruimte_id)
+                ruimte_id = request.form.get('ruimte_id', type=int)
+                ruimte = get_scoped_item(Ruimte, ruimte_id, bedrijf_id)
+                if not ruimte:
+                    flash('Ruimte niet gevonden of geen toegang.', 'warning')
+                    return redirect(url_for('beheer_infra'))
                 db.session.add(Kast(bedrijf_id=bedrijf_id, ruimte_id=ruimte_id, naam=request.form.get('naam'), type_opslag=request.form.get('type_opslag')))
                 db.session.commit()
                 return redirect(url_for('beheer_infra', vestiging_id=ruimte.vestiging_id, ruimte_id=ruimte_id))
@@ -541,32 +672,52 @@ def beheer_infra():
 
     vestigingen = db.session.query(Vestiging).filter_by(bedrijf_id=bedrijf_id).all()
     ruimte_types = db.session.query(Ruimte_Type).filter_by(bedrijf_id=bedrijf_id).all()
+    if active_vestiging_id:
+        active_vestiging = get_scoped_item(Vestiging, active_vestiging_id, bedrijf_id)
+        if not active_vestiging:
+            active_vestiging_id = None
     ruimtes = []
-    if active_vestiging_id: ruimtes = db.session.query(Ruimte).filter_by(vestiging_id=active_vestiging_id).order_by(Ruimte.nummer, Ruimte.naam).all()
+    if active_vestiging_id:
+        ruimtes = db.session.query(Ruimte).filter_by(vestiging_id=active_vestiging_id, bedrijf_id=bedrijf_id).order_by(Ruimte.nummer, Ruimte.naam).all()
+    if active_ruimte_id:
+        active_ruimte = get_scoped_item(Ruimte, active_ruimte_id, bedrijf_id)
+        if not active_ruimte:
+            active_ruimte_id = None
     kasten = []
-    if active_ruimte_id: kasten = db.session.query(Kast).filter_by(ruimte_id=active_ruimte_id).all()
+    if active_ruimte_id:
+        kasten = db.session.query(Kast).filter_by(ruimte_id=active_ruimte_id, bedrijf_id=bedrijf_id).all()
     alle_ruimtes = db.session.query(Ruimte).join(Vestiging).filter(Vestiging.bedrijf_id == bedrijf_id).all()
     return render_template('beheer_infra.html', vestigingen=vestigingen, ruimtes=ruimtes, kasten=kasten, alle_ruimtes=alle_ruimtes, ruimte_types=ruimte_types, active_vestiging_id=active_vestiging_id, active_ruimte_id=active_ruimte_id)
 
 @app.route('/beheer/verwijder/<type>/<int:id>', methods=['POST'])
 def verwijder_item(type, id):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
     try:
         item = None
         if type == 'artikel':
-            item = db.session.query(Lokaal_Artikel).get(id)
-            redirect_url = url_for('artikelen_beheer')
+            item = get_scoped_item(Lokaal_Artikel, id, bedrijf_id)
         elif type == 'voorraad':
-            item = db.session.query(Voorraad_Positie).get(id)
-            if item: redirect_url = url_for('assistent_kamer_view', ruimte_id=db.session.query(Kast).get(item.kast_id).ruimte_id)
-        elif type == 'vestiging': item = db.session.query(Vestiging).get(id)
-        elif type == 'ruimte': item = db.session.query(Ruimte).get(id)
-        elif type == 'kast': item = db.session.query(Kast).get(id)
-        elif type == 'ruimte_type': item = db.session.query(Ruimte_Type).get(id)
+            item = get_scoped_item(Voorraad_Positie, id, bedrijf_id)
+        elif type == 'vestiging':
+            item = get_scoped_item(Vestiging, id, bedrijf_id)
+        elif type == 'ruimte':
+            item = get_scoped_item(Ruimte, id, bedrijf_id)
+        elif type == 'kast':
+            item = get_scoped_item(Kast, id, bedrijf_id)
+        elif type == 'ruimte_type':
+            item = get_scoped_item(Ruimte_Type, id, bedrijf_id)
+        else:
+            flash('Onbekend itemtype.', 'warning')
+            return redirect(request.referrer or url_for('dashboard'))
         
         if item:
             db.session.delete(item)
             db.session.commit()
             flash('Verwijderd.', 'success')
+        else:
+            flash('Item niet gevonden of geen toegang.', 'warning')
     except Exception as e:
         db.session.rollback()
         flash(f'Kan niet verwijderen: {e}', 'danger')
@@ -578,4 +729,4 @@ def update_item(type, id):
     return redirect(request.referrer or url_for('dashboard'))
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=debug_mode)

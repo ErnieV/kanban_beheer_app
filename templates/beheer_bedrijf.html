@@ -19,6 +19,7 @@
             </div>
             <div class="card-body">
                 <form method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     
                     <!-- Huidige Logo Preview -->
                     {% if bedrijf.logo_url %}
@@ -57,6 +58,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <form action="{{ url_for('nieuw_bedrijf') }}" method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <div class="modal-header">
                     <h5 class="modal-title">Nieuw Bedrijf Aanmaken</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
