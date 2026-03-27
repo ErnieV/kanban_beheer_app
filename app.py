@@ -374,15 +374,29 @@ def _fetch_preview_layout_config(endpoint):
         refresh_seconds = DEFAULT_LAYOUT_REFRESH_SECONDS
 
     fetched_at = int(time.time())
+    config = body.get('config') or {}
+    raw_element_count = 0
+    if isinstance(config.get('elements'), list):
+        raw_element_count = len(config.get('elements'))
+    elif isinstance(config.get('items'), list):
+        raw_element_count = len(config.get('items'))
+    elif isinstance(config.get('fields'), list):
+        raw_element_count = len(config.get('fields'))
+
     return {
         "endpoint": endpoint,
         "layoutVersion": str(body.get('layoutVersion') or 'unknown'),
         "template": body.get('template') or '',
         "lastModifiedUtc": body.get('lastModifiedUtc'),
-        "config": body.get('config') or {},
+        "config": config,
         "fetchedAt": fetched_at,
         "nextRefreshAt": fetched_at + int(refresh_seconds),
-        "suggestedRefreshIntervalSeconds": int(refresh_seconds)
+        "suggestedRefreshIntervalSeconds": int(refresh_seconds),
+        "debug": {
+            "bodyKeys": list(body.keys()) if isinstance(body, dict) else [],
+            "configKeys": list(config.keys()) if isinstance(config, dict) else [],
+            "rawElementCount": raw_element_count
+        }
     }
 
 def _get_preview_layout_cache():

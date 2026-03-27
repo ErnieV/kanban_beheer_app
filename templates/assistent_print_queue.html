@@ -193,6 +193,7 @@
             <div class="modal-body bg-light">
                 <div id="previewStatus" class="alert alert-warning small d-none mb-3"></div>
                 <div id="previewError" class="alert alert-danger small d-none mb-3"></div>
+                <div id="previewDebug" class="alert alert-secondary small mb-3"></div>
                 <div class="d-flex justify-content-center">
                     <div id="previewCanvas" class="shadow-sm bg-white position-relative border rounded" style="width: 250px; height: 390px; overflow: hidden;"></div>
                 </div>
@@ -300,11 +301,15 @@
         const el = document.getElementById(id);
         if (!message) {
             el.textContent = '';
-            el.classList.add('d-none');
+            if (id !== 'previewDebug') {
+                el.classList.add('d-none');
+            }
             return;
         }
         el.textContent = message;
-        el.classList.remove('d-none');
+        if (id !== 'previewDebug') {
+            el.classList.remove('d-none');
+        }
     }
 
     function applyBoxStyle(node, element) {
@@ -400,37 +405,219 @@
         root.appendChild(node);
     }
 
+    function createLayer(tagName = 'div') {
+        const node = document.createElement(tagName);
+        node.style.position = 'absolute';
+        node.style.boxSizing = 'border-box';
+        return node;
+    }
+
+    function applyFont(node, font, fallbackSize = 14) {
+        const size = toNumber(font && font.size, fallbackSize);
+        node.style.fontSize = `${size}px`;
+        node.style.fontWeight = (font && font.name && font.name.toLowerCase().includes('bd')) ? '700' : '400';
+        if (font && font.name && font.name.toLowerCase().includes('i')) {
+            node.style.fontStyle = 'italic';
+        }
+    }
+
+    function renderStructuredKanbanLayout(canvas, config, data) {
+        const canvasCfg = config.canvas || {};
+        const headerCfg = config.header || {};
+        const productTextCfg = config.productText || {};
+        const productImageCfg = config.productImage || {};
+        const bottomZoneCfg = config.bottomZone || {};
+        const qrCfg = config.qr || {};
+        const logoCfg = config.logo || {};
+
+        const width = toNumber(canvasCfg.width, 648);
+        const height = toNumber(canvasCfg.height, 1016);
+        const headerHeight = toNumber(headerCfg.height, 120);
+        const bottomY = toNumber(bottomZoneCfg.y, 750);
+        const bottomHeight = toNumber(bottomZoneCfg.height, 266);
+
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        canvas.style.backgroundColor = canvasCfg.backgroundColor || '#ffffff';
+
+        const header = createLayer();
+        header.style.left = '0px';
+        header.style.top = '0px';
+        header.style.width = `${width}px`;
+        header.style.height = `${headerHeight}px`;
+        header.style.backgroundColor = data.headerColor || headerCfg.defaultBackgroundColor || '#3B82F6';
+        header.style.color = headerCfg.defaultTextColor || '#FFFFFF';
+        header.style.display = 'flex';
+        header.style.alignItems = 'center';
+        header.style.justifyContent = 'center';
+        header.style.textAlign = 'center';
+        header.style.textTransform = 'uppercase';
+        header.style.padding = '0 24px';
+        applyFont(header, headerCfg.font, 40);
+        header.textContent = data.header;
+        const headerOffset = toNumber(headerCfg.textOffsetY, 0);
+        if (headerOffset !== 0) {
+            header.style.transform = `translateY(${headerOffset}px)`;
+        }
+        canvas.appendChild(header);
+
+        const textBlocks = [
+            { cfg: productTextCfg.name || {}, value: data.productName },
+            { cfg: productTextCfg.packaging || {}, value: data.packaging },
+            { cfg: productTextCfg.logistics || {}, value: data.locationRaw || data.location }
+        ];
+
+        textBlocks.forEach(({ cfg, value }) => {
+            if (!value) return;
+            const node = createLayer();
+            node.style.left = `${toNumber(cfg.x, 40)}px`;
+            node.style.top = `${toNumber(cfg.y, 0)}px`;
+            node.style.width = `${Math.max(width - toNumber(cfg.x, 40) - 40, 120)}px`;
+            node.style.color = cfg.color || '#000000';
+            node.style.whiteSpace = 'normal';
+            node.style.lineHeight = '1.1';
+            applyFont(node, cfg.font, 24);
+            node.textContent = value;
+            canvas.appendChild(node);
+        });
+
+        if (data.productImage) {
+            const img = createLayer('img');
+            const maxWidth = toNumber(productImageCfg.maxWidth, 400);
+            const maxHeight = toNumber(productImageCfg.maxHeight, 400);
+            const y = toNumber(productImageCfg.y, 350);
+            img.src = data.productImage;
+            img.alt = data.productName || 'Artikel';
+            img.style.maxWidth = `${maxWidth}px`;
+            img.style.maxHeight = `${maxHeight}px`;
+            img.style.width = 'auto';
+            img.style.height = 'auto';
+            img.style.objectFit = 'contain';
+            img.style.top = `${y}px`;
+            if (productImageCfg.centerHorizontally) {
+                img.style.left = '50%';
+                img.style.transform = 'translateX(-50%)';
+            } else {
+                img.style.left = `${toNumber(productImageCfg.x, 40)}px`;
+            }
+            canvas.appendChild(img);
+        }
+
+        const bottomZone = createLayer();
+        bottomZone.style.left = '0px';
+        bottomZone.style.top = `${bottomY}px`;
+        bottomZone.style.width = `${width}px`;
+        bottomZone.style.height = `${bottomHeight}px`;
+        bottomZone.style.backgroundColor = bottomZoneCfg.backgroundColor || '#F5F5F5';
+        canvas.appendChild(bottomZone);
+
+        if (data.qrCodeValue) {
+            const qr = createLayer('img');
+            const qrSize = toNumber(qrCfg.size, 200);
+            qr.src = `https://api.qrserver.com/v1/create-qr-code/?size=${qrSize}x${qrSize}&data=${encodeURIComponent(data.qrCodeValue)}`;
+            qr.alt = 'QR';
+            qr.style.left = `${toNumber(qrCfg.x, 20)}px`;
+            qr.style.top = `${bottomY + toNumber(qrCfg.yOffsetWithinBottomZone, 30)}px`;
+            qr.style.width = `${qrSize}px`;
+            qr.style.height = `${qrSize}px`;
+            qr.style.objectFit = 'contain';
+            canvas.appendChild(qr);
+        }
+
+        if (data.companyLogo) {
+            const logo = createLayer('img');
+            const maxWidth = toNumber(logoCfg.maxWidth, 380);
+            const maxHeight = toNumber(logoCfg.maxHeight, 240);
+            const rightMargin = toNumber(logoCfg.rightMargin, 40);
+            logo.src = data.companyLogo;
+            logo.alt = 'Logo';
+            logo.style.maxWidth = `${maxWidth}px`;
+            logo.style.maxHeight = `${maxHeight}px`;
+            logo.style.width = 'auto';
+            logo.style.height = 'auto';
+            logo.style.objectFit = 'contain';
+            logo.style.right = `${rightMargin}px`;
+            logo.style.top = `${bottomY + Math.max((bottomHeight - maxHeight) / 2, 0)}px`;
+            canvas.appendChild(logo);
+        }
+
+        if (data.humanReadableCode) {
+            const human = createLayer();
+            human.style.left = `${toNumber(qrCfg.x, 20)}px`;
+            human.style.top = `${bottomY + toNumber(qrCfg.yOffsetWithinBottomZone, 30) + toNumber(qrCfg.size, 200) + 12}px`;
+            human.style.width = `${toNumber(qrCfg.size, 200)}px`;
+            human.style.textAlign = 'center';
+            human.style.fontFamily = 'monospace';
+            human.style.fontWeight = '700';
+            human.style.fontSize = '24px';
+            human.textContent = data.humanReadableCode;
+            canvas.appendChild(human);
+        }
+
+        return {
+            mode: 'structured',
+            renderableCount: 7
+        };
+    }
+
     function renderPreview(layout, data) {
         const canvas = document.getElementById('previewCanvas');
         const config = (layout && layout.config) || {};
-        const width = toNumber(firstDefined(config, ['card.width', 'canvas.width', 'page.width', 'width'], 250), 250);
-        const height = toNumber(firstDefined(config, ['card.height', 'canvas.height', 'page.height', 'height'], 390), 390);
-        const backgroundColor = firstDefined(config, ['card.backgroundColor', 'canvas.backgroundColor', 'backgroundColor'], '#ffffff');
-        const borderRadius = toNumber(firstDefined(config, ['card.borderRadius', 'borderRadius'], 4), 4);
-        const elements = normalizeElements(config);
 
         canvas.innerHTML = '';
-        canvas.style.width = `${width}px`;
-        canvas.style.height = `${height}px`;
-        canvas.style.backgroundColor = backgroundColor;
-        canvas.style.borderRadius = `${borderRadius}px`;
+        canvas.style.borderRadius = '4px';
 
-        elements
-            .sort((a, b) => toNumber(firstDefined(a, ['zIndex'], 0), 0) - toNumber(firstDefined(b, ['zIndex'], 0), 0))
-            .forEach((element) => renderElement(canvas, element, data));
+        let renderMeta = null;
+        if (config.canvas && (config.header || config.productText || config.productImage || config.bottomZone || config.qr || config.logo)) {
+            renderMeta = renderStructuredKanbanLayout(canvas, config, data);
+        } else {
+            const width = toNumber(firstDefined(config, ['card.width', 'canvas.width', 'page.width', 'width'], 250), 250);
+            const height = toNumber(firstDefined(config, ['card.height', 'canvas.height', 'page.height', 'height'], 390), 390);
+            const backgroundColor = firstDefined(config, ['card.backgroundColor', 'canvas.backgroundColor', 'backgroundColor'], '#ffffff');
+            const borderRadius = toNumber(firstDefined(config, ['card.borderRadius', 'borderRadius'], 4), 4);
+            const elements = normalizeElements(config);
 
-        if (!elements.length) {
-            const fallback = document.createElement('div');
-            fallback.className = 'h-100 d-flex align-items-center justify-content-center text-muted text-center px-3';
-            fallback.textContent = 'Geen bruikbare layoutconfig ontvangen voor preview.';
-            canvas.appendChild(fallback);
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+            canvas.style.backgroundColor = backgroundColor;
+            canvas.style.borderRadius = `${borderRadius}px`;
+
+            elements
+                .sort((a, b) => toNumber(firstDefined(a, ['zIndex'], 0), 0) - toNumber(firstDefined(b, ['zIndex'], 0), 0))
+                .forEach((element) => renderElement(canvas, element, data));
+
+            renderMeta = {
+                mode: 'generic',
+                renderableCount: elements.length
+            };
+
+            if (!elements.length) {
+                const fallback = document.createElement('div');
+                fallback.className = 'h-100 d-flex align-items-center justify-content-center text-muted text-center px-3';
+                fallback.textContent = 'Geen bruikbare layoutconfig ontvangen voor preview.';
+                canvas.appendChild(fallback);
+            }
         }
+
+        const debug = (layout && layout.debug) || {};
+        const debugLine = [
+            `version=${layout && layout.layoutVersion ? layout.layoutVersion : 'unknown'}`,
+            `template=${layout && layout.template ? layout.template : 'n/a'}`,
+            `endpoint=${layout && layout.endpoint ? layout.endpoint : 'n/a'}`,
+            `mode=${renderMeta ? renderMeta.mode : 'unknown'}`,
+            `renderable=${renderMeta ? renderMeta.renderableCount : 0}`,
+            `raw=${debug.rawElementCount ?? 0}`,
+            `configKeys=${Array.isArray(debug.configKeys) ? debug.configKeys.join(',') || '-' : '-'}`,
+            `bodyKeys=${Array.isArray(debug.bodyKeys) ? debug.bodyKeys.join(',') || '-' : '-'}`
+        ].join(' | ');
+        setPreviewMessage('previewDebug', debugLine);
     }
 
     async function showDetails(button) {
         const data = previewData(button.dataset);
         setPreviewMessage('previewStatus', '');
         setPreviewMessage('previewError', '');
+        setPreviewMessage('previewDebug', 'Layout debug wordt geladen...');
 
         try {
             const result = await loadPreviewLayout(true);
@@ -443,6 +630,7 @@
         } catch (error) {
             document.getElementById('previewCanvas').innerHTML = '';
             setPreviewMessage('previewError', `${error.message} Preview kan niet betrouwbaar worden getoond.`);
+            setPreviewMessage('previewDebug', 'Geen layout JSON bruikbaar ontvangen.');
         }
 
         if (!previewState.modal) {
