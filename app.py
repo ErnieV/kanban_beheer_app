@@ -1061,8 +1061,8 @@ def _group_scan_rows(rows):
     )
 
 
-def _get_kamerlijst_rows(bedrijf_id):
-    return db.session.query(
+def _get_kamerlijst_rows(bedrijf_id, ruimte_id=None):
+    query = db.session.query(
         Voorraad_Positie,
         Lokaal_Artikel,
         Global_Catalogus,
@@ -1084,7 +1084,12 @@ def _get_kamerlijst_rows(bedrijf_id):
         Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id
     ).filter(
         Voorraad_Positie.bedrijf_id == bedrijf_id
-    ).order_by(
+    )
+
+    if ruimte_id is not None:
+        query = query.filter(Ruimte.ruimte_id == ruimte_id)
+
+    return query.order_by(
         Vestiging.naam,
         Ruimte_Type.naam,
         Ruimte.nummer,
@@ -1155,6 +1160,29 @@ def assistent_kamerlijst():
     bedrijf_id = get_huidig_bedrijf_id()
     rows = _get_kamerlijst_rows(bedrijf_id)
     return render_template('assistent_kamerlijst.html', grouped_rows=_group_kamerlijst_rows(rows))
+
+
+@app.route('/assistent/kamerlijst/print/<int:ruimte_id>')
+def assistent_kamerlijst_print(ruimte_id):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+
+    bedrijf_id = get_huidig_bedrijf_id()
+    ruimte = db.session.query(Ruimte).filter(
+        Ruimte.ruimte_id == ruimte_id,
+        Ruimte.bedrijf_id == bedrijf_id
+    ).first()
+    if not ruimte:
+        flash('Ruimte niet gevonden of geen toegang.', 'warning')
+        return redirect(url_for('assistent_kamerlijst'))
+
+    rows = _get_kamerlijst_rows(bedrijf_id, ruimte_id=ruimte_id)
+    return render_template(
+        'assistent_kamerlijst_print.html',
+        grouped_rows=_group_kamerlijst_rows(rows),
+        selected_room=ruimte,
+        generated_at=utcnow()
+    )
 
 @app.route('/assistent/print-queue/test-verbinding', methods=['POST'])
 def test_print_verbinding():

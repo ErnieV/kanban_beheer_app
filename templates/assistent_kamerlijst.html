@@ -6,9 +6,11 @@
         <h2 class="mb-1"><i class="bi bi-list-ul"></i> Kamerlijst</h2>
         <p class="text-muted mb-0">Evaluatie-overzicht van alle artikelen per vestiging, ruimtetype, ruimte en kast.</p>
     </div>
-    <a href="{{ url_for('assistent_kamers') }}" class="btn btn-outline-secondary">
-        <i class="bi bi-door-open"></i> Naar kamers
-    </a>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('assistent_kamers') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-door-open"></i> Naar kamers
+        </a>
+    </div>
 </div>
 
 {% if grouped_rows %}
@@ -28,7 +30,12 @@
             <div class="card-body pt-3">
                 {% for ruimte_group in ruimte_type_group.ruimtes %}
                 <div class="mb-4">
-                    <h4 class="h6 mb-2">{% if ruimte_group.nummer %}{{ ruimte_group.nummer }} - {% endif %}{{ ruimte_group.naam }}</h4>
+                    <div class="d-flex align-items-center justify-content-between mb-2 gap-3">
+                        <h4 class="h6 mb-0">{% if ruimte_group.nummer %}{{ ruimte_group.nummer }} - {% endif %}{{ ruimte_group.naam }}</h4>
+                        <a href="{{ url_for('assistent_kamerlijst_print', ruimte_id=ruimte_group.key) }}" target="_blank" class="btn btn-sm btn-outline-secondary">
+                            <i class="bi bi-printer"></i> Print kamer
+                        </a>
+                    </div>
 
                     {% for kast_group in ruimte_group.kasten %}
                     <div class="border rounded-3 overflow-hidden mb-3">
@@ -42,11 +49,10 @@
                             <table class="table table-sm align-middle mb-0">
                                 <thead class="table-light">
                                     <tr>
-                                        <th style="width: 38%;">Artikel</th>
-                                        <th style="width: 14%;">Min / Max</th>
+                                        <th style="width: 52%;">Artikel</th>
+                                        <th style="width: 18%;">Min / Max</th>
                                         <th style="width: 14%;">Eenheid</th>
-                                        <th style="width: 14%;">Strategie</th>
-                                        <th style="width: 20%;">SKU</th>
+                                        <th style="width: 16%;">SKU</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -66,9 +72,7 @@
                                                 </div>
                                                 <div>
                                                     <div class="fw-semibold">{{ artikel.eigen_naam }}</div>
-                                                    {% if globaal %}
-                                                        <div class="small text-muted">{{ globaal.generieke_naam }}</div>
-                                                    {% endif %}
+                                                    <div class="small text-muted">SKU: {{ (globaal.sku if globaal and globaal.sku else artikel.lokaal_artikel_id) if artikel else '-' }}</div>
                                                 </div>
                                             </div>
                                         </td>
@@ -77,8 +81,7 @@
                                             <span class="badge bg-light text-dark border">Max {{ positie.target_max if positie else '-' }}</span>
                                         </td>
                                         <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
-                                        <td>{{ positie.strategie if positie and positie.strategie else '-' }}</td>
-                                        <td><span class="font-monospace">{{ artikel.lokaal_artikel_id if artikel else '-' }}</span></td>
+                                        <td><span class="font-monospace">{{ (globaal.sku if globaal and globaal.sku else artikel.lokaal_artikel_id) if artikel else '-' }}</span></td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>

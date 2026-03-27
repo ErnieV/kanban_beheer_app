@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="nl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kamerlijst Print</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { color: #111827; font-size: 13px; }
+        .type-chip { display: inline-block; padding: 8px 14px; border-radius: 999px; font-weight: 700; }
+        .product-img { width: 46px; height: 46px; object-fit: contain; border: 1px solid #d1d5db; border-radius: 8px; background: white; }
+        @media print {
+            .no-print { display: none !important; }
+            body { font-size: 11px; }
+            .section-break-avoid { break-inside: avoid; }
+        }
+    </style>
+</head>
+<body class="bg-white">
+    <div class="container py-4">
+        <div class="d-flex justify-content-between align-items-center mb-4 no-print">
+            <h1 class="h3 mb-0">Kamerlijst</h1>
+            <button class="btn btn-primary" onclick="window.print()">Print</button>
+        </div>
+
+        <div class="d-flex align-items-center justify-content-between mb-4">
+            <div class="d-flex align-items-center gap-3">
+                {% if huidig_bedrijf and huidig_bedrijf.logo_url %}
+                    <img src="{{ huidig_bedrijf.logo_url }}" alt="Logo" style="max-height: 56px; max-width: 180px; object-fit: contain;">
+                {% endif %}
+                <div>
+                    <h1 class="h3 mb-1">Kamerlijst</h1>
+                    <p class="text-muted mb-0">
+                        {% if selected_room.nummer %}{{ selected_room.nummer }} - {% endif %}{{ selected_room.naam }} |
+                        Uitgeprint op {{ generated_at|localdt }}
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        {% if grouped_rows %}
+            {% for vestiging_group in grouped_rows %}
+            <section class="mb-4 section-break-avoid">
+                <h2 class="h5 border-bottom pb-2 mb-3">{{ vestiging_group.naam }}</h2>
+
+                {% for ruimte_type_group in vestiging_group.ruimte_types %}
+                <div class="mb-3">
+                    <div class="type-chip mb-2" style="background-color: {{ ruimte_type_group.kleur_hex }}20; border-left: 8px solid {{ ruimte_type_group.kleur_hex }};">
+                        {{ ruimte_type_group.naam }}
+                    </div>
+
+                    {% for ruimte_group in ruimte_type_group.ruimtes %}
+                    <div class="mb-3">
+                        <h3 class="h6 mb-2">{% if ruimte_group.nummer %}{{ ruimte_group.nummer }} - {% endif %}{{ ruimte_group.naam }}</h3>
+
+                        {% for kast_group in ruimte_group.kasten %}
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between align-items-center bg-light border px-3 py-2">
+                                <strong>{{ kast_group.naam }}</strong>
+                                {% if kast_group.type_opslag %}<span class="text-muted">{{ kast_group.type_opslag }}</span>{% endif %}
+                            </div>
+                            <table class="table table-bordered align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Artikel</th>
+                                        <th>Min / Max</th>
+                                        <th>Eenheid</th>
+                                        <th>SKU</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for positie, artikel, globaal, kast, ruimte, ruimte_type, vestiging in kast_group.inventory_rows %}
+                                    <tr>
+                                        <td>
+                                            {% set product_image = (positie.locatie_foto_url if positie and positie.locatie_foto_url else (artikel.foto_url if artikel and artikel.foto_url else (globaal.foto_url if globaal and globaal.foto_url else None))) %}
+                                            {% set sku_value = (globaal.sku if globaal and globaal.sku else artikel.lokaal_artikel_id) if artikel else '-' %}
+                                            <div class="d-flex align-items-start gap-2">
+                                                {% if product_image %}
+                                                    <img src="{{ product_image }}" alt="Artikel" class="product-img">
+                                                {% endif %}
+                                                <div>
+                                                    <div><strong>{{ artikel.eigen_naam }}</strong></div>
+                                                    <div class="text-muted">SKU: {{ sku_value }}</div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>Min {{ positie.trigger_min if positie else '-' }} / Max {{ positie.target_max if positie else '-' }}</td>
+                                        <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
+                                        <td class="font-monospace">{{ sku_value }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </section>
+            {% endfor %}
+        {% else %}
+            <div class="text-center text-muted py-4">Geen artikelen gevonden voor deze kamer.</div>
+        {% endif %}
+    </div>
+</body>
+</html>
