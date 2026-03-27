@@ -10,6 +10,7 @@ import base64
 import mimetypes
 import threading
 import time
+from zoneinfo import ZoneInfo
 import requests
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
@@ -58,6 +59,7 @@ APP_BUILD_DATETIME = os.environ.get(
     'APP_BUILD_DATETIME',
     datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 )
+APP_TIMEZONE = os.environ.get('APP_TIMEZONE', 'Europe/Amsterdam')
 DEFAULT_LAYOUT_REFRESH_SECONDS = 300
 
 if not all([db_server, db_name, db_user, db_pass]):
@@ -228,6 +230,7 @@ def generate_csrf_token():
     return token
 
 app.jinja_env.globals['csrf_token'] = generate_csrf_token
+app.jinja_env.filters['localdt'] = format_local_dt
 
 @app.before_request
 def csrf_protect():
@@ -256,6 +259,14 @@ def upload_image_to_azure(file):
 
 def utcnow():
     return datetime.datetime.utcnow()
+
+
+def format_local_dt(value, fmt='%d-%m-%Y %H:%M'):
+    if not value:
+        return '-'
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    return value.astimezone(ZoneInfo(APP_TIMEZONE)).strftime(fmt)
 
 
 def _generate_human_code():
@@ -902,12 +913,112 @@ def api_preview_layout():
 
 
 def _get_open_scan_rows(bedrijf_id):
-    return db.session.query(KanbanScanlijstItem, KanbanKaart).join(
+    return db.session.query(
+        KanbanScanlijstItem,
+        KanbanKaart,
+        Voorraad_Positie,
+        Lokaal_Artikel,
+        Global_Catalogus,
+        Kast,
+        Ruimte,
+        Ruimte_Type,
+        Bedrijf,
+        Vestiging
+    ).join(
         KanbanKaart, KanbanScanlijstItem.kaart_id == KanbanKaart.kaart_id
+    ).outerjoin(
+        Voorraad_Positie, KanbanKaart.voorraad_positie_id == Voorraad_Positie.voorraad_positie_id
+    ).outerjoin(
+        Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id
+    ).outerjoin(
+        Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id
+    ).outerjoin(
+        Kast, Voorraad_Positie.kast_id == Kast.kast_id
+    ).outerjoin(
+        Ruimte, Kast.ruimte_id == Ruimte.ruimte_id
+    ).outerjoin(
+        Ruimte_Type, Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id
+    ).outerjoin(
+        Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id
+    ).outerjoin(
+        Bedrijf, KanbanKaart.bedrijf_id == Bedrijf.bedrijf_id
     ).filter(
         KanbanScanlijstItem.bedrijf_id == bedrijf_id,
         KanbanScanlijstItem.reset_at.is_(None)
     ).order_by(KanbanScanlijstItem.last_scanned_at.desc()).all()
+
+
+def _group_scan_rows(rows):
+    grouped = []
+    vestiging_lookup = {}
+
+    for row in rows:
+        scan_item, kaart, positie, artikel, globaal, kast, ruimte, ruimte_type, bedrijf, vestiging = row
+        vestiging_key = vestiging.vestiging_id if vestiging else 'geen-vestiging'
+        ruimte_type_key = ruimte_type.ruimte_type_id if ruimte_type else f"geen-type-{vestiging_key}"
+        ruimte_key = ruimte.ruimte_id if ruimte else f"geen-ruimte-{vestiging_key}"
+        kast_key = kast.kast_id if kast else f"geen-kast-{ruimte_key}"
+
+        vestiging_group = vestiging_lookup.get(vestiging_key)
+        if not vestiging_group:
+            vestiging_group = {
+                "key": vestiging_key,
+                "naam": vestiging.naam if vestiging else "Onbekende vestiging",
+                "ruimte_types": [],
+                "_ruimte_type_lookup": {}
+            }
+            vestiging_lookup[vestiging_key] = vestiging_group
+            grouped.append(vestiging_group)
+
+        ruimte_type_group = vestiging_group["_ruimte_type_lookup"].get(ruimte_type_key)
+        if not ruimte_type_group:
+            ruimte_type_group = {
+                "key": ruimte_type_key,
+                "naam": ruimte_type.naam if ruimte_type else "Geen ruimtetype",
+                "kleur_hex": (ruimte_type.kleur_hex if ruimte_type and ruimte_type.kleur_hex else "#CBD5E1"),
+                "ruimtes": [],
+                "_ruimte_lookup": {}
+            }
+            vestiging_group["_ruimte_type_lookup"][ruimte_type_key] = ruimte_type_group
+            vestiging_group["ruimte_types"].append(ruimte_type_group)
+
+        ruimte_group = ruimte_type_group["_ruimte_lookup"].get(ruimte_key)
+        if not ruimte_group:
+            ruimte_group = {
+                "key": ruimte_key,
+                "naam": ruimte.naam if ruimte else "Onbekende ruimte",
+                "nummer": ruimte.nummer if ruimte else None,
+                "kasten": [],
+                "_kast_lookup": {}
+            }
+            ruimte_type_group["_ruimte_lookup"][ruimte_key] = ruimte_group
+            ruimte_type_group["ruimtes"].append(ruimte_group)
+
+        kast_group = ruimte_group["_kast_lookup"].get(kast_key)
+        if not kast_group:
+            kast_group = {
+                "key": kast_key,
+                "naam": kast.naam if kast else "Onbekende kast",
+                "type_opslag": kast.type_opslag if kast else None,
+                "items": []
+            }
+            ruimte_group["_kast_lookup"][kast_key] = kast_group
+            ruimte_group["kasten"].append(kast_group)
+
+        kast_group["items"].append(row)
+
+    for vestiging_group in grouped:
+        vestiging_group.pop("_ruimte_type_lookup", None)
+        vestiging_group["ruimte_types"].sort(key=lambda item: item["naam"])
+        for ruimte_type_group in vestiging_group["ruimte_types"]:
+            ruimte_type_group.pop("_ruimte_lookup", None)
+            ruimte_type_group["ruimtes"].sort(key=lambda item: ((item["nummer"] or ""), item["naam"]))
+            for ruimte_group in ruimte_type_group["ruimtes"]:
+                ruimte_group.pop("_kast_lookup", None)
+                ruimte_group["kasten"].sort(key=lambda item: item["naam"])
+
+    grouped.sort(key=lambda item: item["naam"])
+    return grouped
 
 
 @app.route('/assistent/scanlijst')
@@ -916,7 +1027,7 @@ def assistent_scanlijst():
         return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
     rows = _get_open_scan_rows(bedrijf_id)
-    return render_template('assistent_scanlijst.html', rows=rows)
+    return render_template('assistent_scanlijst.html', rows=rows, grouped_rows=_group_scan_rows(rows))
 
 
 @app.route('/assistent/scanlijst/print')
@@ -925,7 +1036,12 @@ def assistent_scanlijst_print():
         return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
     rows = _get_open_scan_rows(bedrijf_id)
-    return render_template('assistent_scanlijst_print.html', rows=rows, generated_at=utcnow())
+    return render_template(
+        'assistent_scanlijst_print.html',
+        rows=rows,
+        grouped_rows=_group_scan_rows(rows),
+        generated_at=utcnow()
+    )
 
 
 @app.route('/assistent/scanlijst/reset', methods=['POST'])

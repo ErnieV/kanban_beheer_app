@@ -6,8 +6,13 @@
     <title>Scanlijst Print</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
+        body { color: #111827; font-size: 13px; }
+        .type-chip { display: inline-block; padding: 8px 14px; border-radius: 999px; font-weight: 700; }
+        .product-img { width: 46px; height: 46px; object-fit: contain; border: 1px solid #d1d5db; border-radius: 8px; background: white; }
         @media print {
             .no-print { display: none !important; }
+            body { font-size: 11px; }
+            .section-break-avoid { break-inside: avoid; }
         }
     </style>
 </head>
@@ -18,33 +23,83 @@
             <button class="btn btn-primary" onclick="window.print()">Print</button>
         </div>
 
-        <h1 class="h3 mb-3 d-none d-print-block">Scanlijst</h1>
-        <p class="text-muted">Gegenereerd op {{ generated_at.strftime('%d-%m-%Y %H:%M') if generated_at else '' }}</p>
+        <div class="d-flex align-items-center justify-content-between mb-4">
+            <div class="d-flex align-items-center gap-3">
+                {% if huidig_bedrijf and huidig_bedrijf.logo_url %}
+                    <img src="{{ huidig_bedrijf.logo_url }}" alt="Logo" style="max-height: 56px; max-width: 180px; object-fit: contain;">
+                {% endif %}
+                <div>
+                    <h1 class="h3 mb-1">Scanlijst</h1>
+                    <p class="text-muted mb-0">Uitgeprint op {{ generated_at|localdt }}</p>
+                </div>
+            </div>
+        </div>
 
-        <table class="table table-bordered align-middle">
-            <thead class="table-light">
-                <tr>
-                    <th>Artikel</th>
-                    <th>Locatie</th>
-                    <th>Code</th>
-                    <th>Laatst gescand</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for scan_item, kaart in rows %}
-                <tr>
-                    <td>{{ kaart.product_name }}</td>
-                    <td>{{ kaart.location_text }}</td>
-                    <td class="font-monospace">{{ kaart.human_code }}</td>
-                    <td>{{ scan_item.last_scanned_at.strftime('%d-%m-%Y %H:%M') if scan_item.last_scanned_at else '-' }}</td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="4" class="text-center text-muted py-4">Geen openstaande scans.</td>
-                </tr>
+        {% if grouped_rows %}
+            {% for vestiging_group in grouped_rows %}
+            <section class="mb-4 section-break-avoid">
+                <h2 class="h5 border-bottom pb-2 mb-3">{{ vestiging_group.naam }}</h2>
+
+                {% for ruimte_type_group in vestiging_group.ruimte_types %}
+                <div class="mb-3">
+                    <div class="type-chip mb-2" style="background-color: {{ ruimte_type_group.kleur_hex }}20; border-left: 8px solid {{ ruimte_type_group.kleur_hex }};">
+                        {{ ruimte_type_group.naam }}
+                    </div>
+
+                    {% for ruimte_group in ruimte_type_group.ruimtes %}
+                    <div class="mb-3">
+                        <h3 class="h6 mb-2">{% if ruimte_group.nummer %}{{ ruimte_group.nummer }} - {% endif %}{{ ruimte_group.naam }}</h3>
+
+                        {% for kast_group in ruimte_group.kasten %}
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between align-items-center bg-light border px-3 py-2">
+                                <strong>{{ kast_group.naam }}</strong>
+                                {% if kast_group.type_opslag %}<span class="text-muted">{{ kast_group.type_opslag }}</span>{% endif %}
+                            </div>
+                            <table class="table table-bordered align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Artikel</th>
+                                        <th>Min / Max</th>
+                                        <th>Eenheid</th>
+                                        <th>Code</th>
+                                        <th>Laatst gescand</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for scan_item, kaart, positie, artikel, globaal, kast, ruimte, ruimte_type, bedrijf, vestiging in kast_group.items %}
+                                    <tr>
+                                        <td>
+                                            {% set product_image = (positie.locatie_foto_url if positie and positie.locatie_foto_url else (artikel.foto_url if artikel and artikel.foto_url else (globaal.foto_url if globaal and globaal.foto_url else None))) %}
+                                            <div class="d-flex align-items-start gap-2">
+                                                {% if product_image %}
+                                                    <img src="{{ product_image }}" alt="Artikel" class="product-img">
+                                                {% endif %}
+                                                <div>
+                                                    <div><strong>{{ kaart.product_name }}</strong></div>
+                                                    <div class="text-muted">SKU: {{ kaart.product_sku or 'Geen SKU' }}</div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>Min {{ positie.trigger_min if positie else '-' }} / Max {{ positie.target_max if positie else '-' }}</td>
+                                        <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
+                                        <td class="font-monospace">{{ kaart.human_code }}</td>
+                                        <td>{{ scan_item.last_scanned_at|localdt }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endfor %}
+                </div>
                 {% endfor %}
-            </tbody>
-        </table>
+            </section>
+            {% endfor %}
+        {% else %}
+            <div class="text-center text-muted py-4">Geen openstaande scans.</div>
+        {% endif %}
     </div>
 </body>
 </html>
