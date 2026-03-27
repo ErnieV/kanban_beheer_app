@@ -164,7 +164,7 @@ def inject_context():
             alle_bedrijven=[],
             open_scan_count=0,
             app_version=APP_VERSION,
-            app_build_datetime=APP_BUILD_DATETIME
+            app_build_datetime=format_build_datetime(APP_BUILD_DATETIME)
         )
     
     # Huidig bedrijf ophalen
@@ -188,7 +188,7 @@ def inject_context():
         alle_bedrijven=alle_bedrijven,
         open_scan_count=open_scan_count,
         app_version=APP_VERSION,
-        app_build_datetime=APP_BUILD_DATETIME
+        app_build_datetime=format_build_datetime(APP_BUILD_DATETIME)
     )
 
 def get_huidig_bedrijf_id():
@@ -266,6 +266,36 @@ def format_local_dt(value, fmt='%d-%m-%Y %H:%M'):
     if value.tzinfo is None:
         value = value.replace(tzinfo=datetime.timezone.utc)
     return value.astimezone(ZoneInfo(APP_TIMEZONE)).strftime(fmt)
+
+
+def format_build_datetime(value):
+    if not value:
+        return '-'
+    if isinstance(value, datetime.datetime):
+        return format_local_dt(value, '%d-%m-%Y %H:%M')
+
+    text_value = str(value).strip()
+    parse_candidates = [
+        ('%Y-%m-%d %H:%M UTC', datetime.timezone.utc),
+        ('%Y-%m-%d %H:%M:%S UTC', datetime.timezone.utc),
+        ('%Y-%m-%d %H:%M', datetime.timezone.utc),
+        ('%Y-%m-%d %H:%M:%S', datetime.timezone.utc),
+    ]
+
+    for fmt, tzinfo in parse_candidates:
+        try:
+            parsed = datetime.datetime.strptime(text_value, fmt).replace(tzinfo=tzinfo)
+            return format_local_dt(parsed, '%d-%m-%Y %H:%M')
+        except ValueError:
+            continue
+
+    try:
+        parsed = datetime.datetime.fromisoformat(text_value.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        return format_local_dt(parsed, '%d-%m-%Y %H:%M')
+    except ValueError:
+        return text_value
 
 
 app.jinja_env.filters['localdt'] = format_local_dt
@@ -950,12 +980,12 @@ def _get_open_scan_rows(bedrijf_id):
     ).order_by(KanbanScanlijstItem.last_scanned_at.desc()).all()
 
 
-def _group_scan_rows(rows):
+def _group_rows_by_location(rows, row_key, extractor):
     grouped = []
     vestiging_lookup = {}
 
     for row in rows:
-        scan_item, kaart, positie, artikel, globaal, kast, ruimte, ruimte_type, bedrijf, vestiging = row
+        vestiging, ruimte_type, ruimte, kast = extractor(row)
         vestiging_key = vestiging.vestiging_id if vestiging else 'geen-vestiging'
         ruimte_type_key = ruimte_type.ruimte_type_id if ruimte_type else f"geen-type-{vestiging_key}"
         ruimte_key = ruimte.ruimte_id if ruimte else f"geen-ruimte-{vestiging_key}"
@@ -1002,12 +1032,12 @@ def _group_scan_rows(rows):
                 "key": kast_key,
                 "naam": kast.naam if kast else "Onbekende kast",
                 "type_opslag": kast.type_opslag if kast else None,
-                "scan_rows": []
+                row_key: []
             }
             ruimte_group["_kast_lookup"][kast_key] = kast_group
             ruimte_group["kasten"].append(kast_group)
 
-        kast_group["scan_rows"].append(row)
+        kast_group[row_key].append(row)
 
     for vestiging_group in grouped:
         vestiging_group.pop("_ruimte_type_lookup", None)
@@ -1021,6 +1051,55 @@ def _group_scan_rows(rows):
 
     grouped.sort(key=lambda item: item["naam"])
     return grouped
+
+
+def _group_scan_rows(rows):
+    return _group_rows_by_location(
+        rows,
+        "scan_rows",
+        lambda row: (row[9], row[7], row[6], row[5])
+    )
+
+
+def _get_kamerlijst_rows(bedrijf_id):
+    return db.session.query(
+        Voorraad_Positie,
+        Lokaal_Artikel,
+        Global_Catalogus,
+        Kast,
+        Ruimte,
+        Ruimte_Type,
+        Vestiging
+    ).join(
+        Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id
+    ).outerjoin(
+        Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id
+    ).outerjoin(
+        Kast, Voorraad_Positie.kast_id == Kast.kast_id
+    ).outerjoin(
+        Ruimte, Kast.ruimte_id == Ruimte.ruimte_id
+    ).outerjoin(
+        Ruimte_Type, Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id
+    ).outerjoin(
+        Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id
+    ).filter(
+        Voorraad_Positie.bedrijf_id == bedrijf_id
+    ).order_by(
+        Vestiging.naam,
+        Ruimte_Type.naam,
+        Ruimte.nummer,
+        Ruimte.naam,
+        Kast.naam,
+        Lokaal_Artikel.eigen_naam
+    ).all()
+
+
+def _group_kamerlijst_rows(rows):
+    return _group_rows_by_location(
+        rows,
+        "inventory_rows",
+        lambda row: (row[6], row[5], row[4], row[3])
+    )
 
 
 @app.route('/assistent/scanlijst')
@@ -1067,6 +1146,15 @@ def assistent_scanlijst_reset():
     db.session.commit()
     flash(f'{len(rows)} scan(s) gereset.', 'success')
     return redirect(url_for('assistent_scanlijst'))
+
+
+@app.route('/assistent/kamerlijst')
+def assistent_kamerlijst():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    rows = _get_kamerlijst_rows(bedrijf_id)
+    return render_template('assistent_kamerlijst.html', grouped_rows=_group_kamerlijst_rows(rows))
 
 @app.route('/assistent/print-queue/test-verbinding', methods=['POST'])
 def test_print_verbinding():

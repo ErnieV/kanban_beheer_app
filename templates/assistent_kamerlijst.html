@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-list-ul"></i> Kamerlijst</h2>
+        <p class="text-muted mb-0">Evaluatie-overzicht van alle artikelen per vestiging, ruimtetype, ruimte en kast.</p>
+    </div>
+    <a href="{{ url_for('assistent_kamers') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-door-open"></i> Naar kamers
+    </a>
+</div>
+
+{% if grouped_rows %}
+    {% for vestiging_group in grouped_rows %}
+    <section class="mb-4">
+        <div class="bg-white border rounded-3 shadow-sm p-3 mb-3">
+            <h3 class="h5 mb-0"><i class="bi bi-building me-2 text-secondary"></i>{{ vestiging_group.naam }}</h3>
+        </div>
+
+        {% for ruimte_type_group in vestiging_group.ruimte_types %}
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white border-0 pb-0">
+                <div class="d-inline-flex align-items-center rounded-pill px-3 py-2 fw-semibold" style="background-color: {{ ruimte_type_group.kleur_hex }}20; color: #1f2937; border-left: 8px solid {{ ruimte_type_group.kleur_hex }};">
+                    {{ ruimte_type_group.naam }}
+                </div>
+            </div>
+            <div class="card-body pt-3">
+                {% for ruimte_group in ruimte_type_group.ruimtes %}
+                <div class="mb-4">
+                    <h4 class="h6 mb-2">{% if ruimte_group.nummer %}{{ ruimte_group.nummer }} - {% endif %}{{ ruimte_group.naam }}</h4>
+
+                    {% for kast_group in ruimte_group.kasten %}
+                    <div class="border rounded-3 overflow-hidden mb-3">
+                        <div class="bg-light px-3 py-2 d-flex justify-content-between align-items-center">
+                            <div class="fw-semibold">{{ kast_group.naam }}</div>
+                            {% if kast_group.type_opslag %}
+                                <span class="text-muted small">{{ kast_group.type_opslag }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width: 38%;">Artikel</th>
+                                        <th style="width: 14%;">Min / Max</th>
+                                        <th style="width: 14%;">Eenheid</th>
+                                        <th style="width: 14%;">Strategie</th>
+                                        <th style="width: 20%;">SKU</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for positie, artikel, globaal, kast, ruimte, ruimte_type, vestiging in kast_group.inventory_rows %}
+                                    <tr>
+                                        <td>
+                                            {% set product_image = (positie.locatie_foto_url if positie and positie.locatie_foto_url else (artikel.foto_url if artikel and artikel.foto_url else (globaal.foto_url if globaal and globaal.foto_url else None))) %}
+                                            <div class="d-flex align-items-start gap-3">
+                                                <div class="flex-shrink-0">
+                                                    {% if product_image %}
+                                                        <img src="{{ product_image }}" alt="Artikel" class="rounded border bg-white" style="width: 52px; height: 52px; object-fit: contain;">
+                                                    {% else %}
+                                                        <div class="rounded border bg-light d-flex align-items-center justify-content-center text-muted" style="width: 52px; height: 52px;">
+                                                            <i class="bi bi-box-seam"></i>
+                                                        </div>
+                                                    {% endif %}
+                                                </div>
+                                                <div>
+                                                    <div class="fw-semibold">{{ artikel.eigen_naam }}</div>
+                                                    {% if globaal %}
+                                                        <div class="small text-muted">{{ globaal.generieke_naam }}</div>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-light text-dark border">Min {{ positie.trigger_min if positie else '-' }}</span>
+                                            <span class="badge bg-light text-dark border">Max {{ positie.target_max if positie else '-' }}</span>
+                                        </td>
+                                        <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
+                                        <td>{{ positie.strategie if positie and positie.strategie else '-' }}</td>
+                                        <td><span class="font-monospace">{{ artikel.lokaal_artikel_id if artikel else '-' }}</span></td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+    {% endfor %}
+{% else %}
+<div class="card shadow-sm">
+    <div class="card-body text-center py-5 text-muted">
+        <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+        Er zijn nog geen artikelen in de kamerlijst gevonden.
+    </div>
+</div>
+{% endif %}
+{% endblock %}
