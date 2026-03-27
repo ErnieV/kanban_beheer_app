@@ -1002,12 +1002,12 @@ def _group_scan_rows(rows):
                 "key": kast_key,
                 "naam": kast.naam if kast else "Onbekende kast",
                 "type_opslag": kast.type_opslag if kast else None,
-                "items": []
+                "scan_rows": []
             }
             ruimte_group["_kast_lookup"][kast_key] = kast_group
             ruimte_group["kasten"].append(kast_group)
 
-        kast_group["items"].append(row)
+        kast_group["scan_rows"].append(row)
 
     for vestiging_group in grouped:
         vestiging_group.pop("_ruimte_type_lookup", None)
