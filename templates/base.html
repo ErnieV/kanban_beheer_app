@@ -30,6 +30,7 @@
                             <li><a class="dropdown-item" href="{{ url_for('artikelen_beheer') }}">Mijn Artikelen</a></li>
                             <li><hr class="dropdown-divider"></li>
                             <li><a class="dropdown-item" href="{{ url_for('assistent_print_queue') }}">Print Wachtrij</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('assistent_scanlijst') }}">Scanlijst{% if open_scan_count %} ({{ open_scan_count }}){% endif %}</a></li>
                         </ul>
                     </li>
                     <li class="nav-item dropdown">

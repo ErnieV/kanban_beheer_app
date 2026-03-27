@@ -15,7 +15,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, ses
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text, inspect
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from azure.storage.blob import BlobServiceClient
@@ -44,11 +44,15 @@ connect_str = os.environ.get('AZURE_STORAGE_CONNECTION_STRING')
 container_name = os.environ.get('AZURE_CONTAINER_NAME')
 
 API_BASE_URL = os.environ.get('KANBAN_API_BASE_URL', 'https://api.uw-zorginstelling.nl/scan')
+default_scan_base_url = API_BASE_URL.rstrip('/')
+if default_scan_base_url.endswith('/scan'):
+    default_scan_base_url = default_scan_base_url[:-5]
 PRINT_SERVICE_URL = os.environ.get('PRINT_SERVICE_URL')
 PRINT_SERVICE_API_KEY = os.environ.get('PRINT_SERVICE_API_KEY')
 PRINT_SERVICE_REQUIRE_API_KEY = os.environ.get('PRINT_SERVICE_REQUIRE_API_KEY', '1') == '1'
 PRINT_CONNECT_TIMEOUT = float(os.environ.get('PRINT_CONNECT_TIMEOUT', '3'))
 PRINT_REQUEST_TIMEOUT = float(os.environ.get('PRINT_REQUEST_TIMEOUT', '10'))
+KANBAN_SCAN_BASE_URL = os.environ.get('KANBAN_SCAN_BASE_URL', default_scan_base_url)
 APP_VERSION = os.environ.get('APP_VERSION', 'dev')
 APP_BUILD_DATETIME = os.environ.get(
     'APP_BUILD_DATETIME',
@@ -67,6 +71,47 @@ app.config['SQLALCHEMY_DATABASE_URI'] = f"mssql+pyodbc://{encoded_user}:{encoded
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
+
+
+class KanbanKaart(db.Model):
+    __tablename__ = 'Kanban_Kaart'
+
+    kaart_id = db.Column(db.String(36), primary_key=True)
+    bedrijf_id = db.Column(db.Integer, nullable=False, index=True)
+    voorraad_positie_id = db.Column(db.Integer, nullable=False, index=True)
+    public_token = db.Column(db.String(128), nullable=False, unique=True, index=True)
+    human_code = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    product_name = db.Column(db.String(255), nullable=False)
+    location_text = db.Column(db.String(255), nullable=False)
+    product_sku = db.Column(db.String(64), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='PENDING_PRINT')
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    printed_at = db.Column(db.DateTime, nullable=True)
+    cancelled_at = db.Column(db.DateTime, nullable=True)
+
+
+class KanbanScanlijstItem(db.Model):
+    __tablename__ = 'Kanban_Scanlijst_Item'
+
+    scanlijst_item_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    kaart_id = db.Column(db.String(36), nullable=False, index=True)
+    bedrijf_id = db.Column(db.Integer, nullable=False, index=True)
+    first_scanned_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    last_scanned_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    scan_count = db.Column(db.Integer, nullable=False, default=1)
+    reset_at = db.Column(db.DateTime, nullable=True)
+    reset_by = db.Column(db.String(255), nullable=True)
+
+
+def ensure_scan_schema():
+    inspector = inspect(db.engine)
+    db.create_all()
+
+    if inspector.has_table('Print_Queue'):
+        existing_columns = {col['name'] for col in inspector.get_columns('Print_Queue')}
+        if 'kaart_id' not in existing_columns:
+            db.session.execute(text("ALTER TABLE Print_Queue ADD kaart_id NVARCHAR(36) NULL"))
+            db.session.commit()
 
 # --- AUTOMAP & MODELS ---
 Base = automap_base()
@@ -87,6 +132,7 @@ PREVIEW_LAYOUT_LOCK = threading.Lock()
 
 with app.app_context():
     try:
+        ensure_scan_schema()
         Base.prepare(db.engine, reflect=True)
         Global_Catalogus = getattr(Base.classes, 'Global_Catalogus', None)
         Lokaal_Artikel = getattr(Base.classes, 'Lokaal_Artikel', None)
@@ -114,6 +160,7 @@ def inject_context():
         return dict(
             huidig_bedrijf=None,
             alle_bedrijven=[],
+            open_scan_count=0,
             app_version=APP_VERSION,
             app_build_datetime=APP_BUILD_DATETIME
         )
@@ -124,10 +171,20 @@ def inject_context():
     
     # NIEUW: Alle bedrijven ophalen voor de selector in de navbar
     alle_bedrijven = db.session.query(Bedrijf).order_by(Bedrijf.naam).all()
+    open_scan_count = 0
+    if bedrijf_id:
+        try:
+            open_scan_count = db.session.query(KanbanScanlijstItem).filter(
+                KanbanScanlijstItem.bedrijf_id == bedrijf_id,
+                KanbanScanlijstItem.reset_at.is_(None)
+            ).count()
+        except Exception:
+            open_scan_count = 0
     
     return dict(
         huidig_bedrijf=bedrijf,
         alle_bedrijven=alle_bedrijven,
+        open_scan_count=open_scan_count,
         app_version=APP_VERSION,
         app_build_datetime=APP_BUILD_DATETIME
     )
@@ -197,11 +254,57 @@ def upload_image_to_azure(file):
 
 # --- HELPERS ---
 
+def utcnow():
+    return datetime.datetime.utcnow()
+
+
+def _generate_human_code():
+    return f"KB-{secrets.token_hex(4).upper()}"
+
+
+def _generate_public_scan_url(public_token):
+    base_url = (KANBAN_SCAN_BASE_URL or '').rstrip('/')
+    if not base_url:
+        return ''
+    return f"{base_url}/scan/{public_token}"
+
+
+def _get_reset_actor():
+    return (
+        request.headers.get('X-MS-CLIENT-PRINCIPAL-NAME')
+        or request.headers.get('X-MS-CLIENT-PRINCIPAL')
+        or request.headers.get('X-Forwarded-User')
+        or 'webapp-user'
+    )
+
+
+def _create_kanban_card(pos, art, kast, ruimte, bedrijf):
+    human_code = _generate_human_code()
+    while db.session.query(KanbanKaart).filter(KanbanKaart.human_code == human_code).first():
+        human_code = _generate_human_code()
+
+    card = KanbanKaart(
+        kaart_id=str(uuid.uuid4()),
+        bedrijf_id=bedrijf.bedrijf_id,
+        voorraad_positie_id=pos.voorraad_positie_id,
+        public_token=secrets.token_urlsafe(32),
+        human_code=human_code,
+        product_name=art.eigen_naam,
+        location_text=f"{kast.naam} ({kast.type_opslag})",
+        product_sku=str(art.lokaal_artikel_id),
+        status='PENDING_PRINT',
+        created_at=utcnow()
+    )
+    db.session.add(card)
+    db.session.flush()
+    return card
+
 def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
     header_text = ruimte.naam.upper()
     if ruimte.nummer: header_text = f"{ruimte.nummer} {header_text}"
-    
-    return Print_Queue(
+    card = _create_kanban_card(pos, art, kast, ruimte, bedrijf)
+
+    queue_kwargs = dict(
         bedrijf_id=bedrijf.bedrijf_id,
         status='PENDING',
         printer_id="reception-badgy-01",
@@ -215,10 +318,38 @@ def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
         location_text=f"{kast.naam} ({kast.type_opslag})",
         min_level=pos.trigger_min,
         max_level=pos.target_max,
-        qr_code_value=pos.qr_code or "NO_QR",
-        qr_human_readable=f"POS-{pos.voorraad_positie_id}",
+        qr_code_value=_generate_public_scan_url(card.public_token),
+        qr_human_readable=card.human_code,
         company_logo_url=bedrijf.logo_url
     )
+    if hasattr(Print_Queue, 'kaart_id'):
+        queue_kwargs['kaart_id'] = card.kaart_id
+
+    return Print_Queue(**queue_kwargs)
+
+
+def _get_queue_card(queue_item):
+    kaart_id = getattr(queue_item, 'kaart_id', None)
+    if not kaart_id:
+        return None
+    return db.session.query(KanbanKaart).filter(KanbanKaart.kaart_id == kaart_id).first()
+
+
+def _mark_card_printed(queue_item):
+    card = _get_queue_card(queue_item)
+    if not card:
+        return
+    card.status = 'PRINTED'
+    card.printed_at = utcnow()
+    card.cancelled_at = None
+
+
+def _mark_card_cancelled(queue_item):
+    card = _get_queue_card(queue_item)
+    if not card:
+        return
+    card.status = 'CANCELLED'
+    card.cancelled_at = utcnow()
 
 def _image_to_base64_object(image_source, label):
     if not image_source:
@@ -496,6 +627,7 @@ def dashboard():
     
     # Count voor print wachtrij (alleen voor huidig bedrijf)
     print_queue_count = 0
+    open_scan_count = 0
     huidig_id = get_huidig_bedrijf_id()
     if huidig_id:
         try:
@@ -503,10 +635,19 @@ def dashboard():
                 bedrijf_id=huidig_id, 
                 status='PENDING'
             ).count()
+            open_scan_count = db.session.query(KanbanScanlijstItem).filter(
+                KanbanScanlijstItem.bedrijf_id == huidig_id,
+                KanbanScanlijstItem.reset_at.is_(None)
+            ).count()
         except Exception:
             print_queue_count = 0
+            open_scan_count = 0
 
-    return render_template('dashboard.html', print_queue_count=print_queue_count)
+    return render_template(
+        'dashboard.html',
+        print_queue_count=print_queue_count,
+        open_scan_count=open_scan_count
+    )
 
 @app.route('/switch-bedrijf/<int:bedrijf_id>')
 def switch_bedrijf(bedrijf_id):
@@ -759,6 +900,56 @@ def api_preview_layout():
             "error": str(exc)
         }), 503
 
+
+def _get_open_scan_rows(bedrijf_id):
+    return db.session.query(KanbanScanlijstItem, KanbanKaart).join(
+        KanbanKaart, KanbanScanlijstItem.kaart_id == KanbanKaart.kaart_id
+    ).filter(
+        KanbanScanlijstItem.bedrijf_id == bedrijf_id,
+        KanbanScanlijstItem.reset_at.is_(None)
+    ).order_by(KanbanScanlijstItem.last_scanned_at.desc()).all()
+
+
+@app.route('/assistent/scanlijst')
+def assistent_scanlijst():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    rows = _get_open_scan_rows(bedrijf_id)
+    return render_template('assistent_scanlijst.html', rows=rows)
+
+
+@app.route('/assistent/scanlijst/print')
+def assistent_scanlijst_print():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    rows = _get_open_scan_rows(bedrijf_id)
+    return render_template('assistent_scanlijst_print.html', rows=rows, generated_at=utcnow())
+
+
+@app.route('/assistent/scanlijst/reset', methods=['POST'])
+def assistent_scanlijst_reset():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    rows = db.session.query(KanbanScanlijstItem).filter(
+        KanbanScanlijstItem.bedrijf_id == bedrijf_id,
+        KanbanScanlijstItem.reset_at.is_(None)
+    ).all()
+    if not rows:
+        flash('Geen openstaande scans om te resetten.', 'info')
+        return redirect(url_for('assistent_scanlijst'))
+
+    reset_at = utcnow()
+    reset_by = _get_reset_actor()
+    for row in rows:
+        row.reset_at = reset_at
+        row.reset_by = reset_by
+    db.session.commit()
+    flash(f'{len(rows)} scan(s) gereset.', 'success')
+    return redirect(url_for('assistent_scanlijst'))
+
 @app.route('/assistent/print-queue/test-verbinding', methods=['POST'])
 def test_print_verbinding():
     if not check_db():
@@ -792,6 +983,7 @@ def verstuur_print_opdracht(print_id):
 
     sent, error_msg = send_queue_item_to_print_service(item)
     if sent:
+        _mark_card_printed(item)
         db.session.delete(item)
         db.session.commit()
         flash("Kaartje naar lokale printer gestuurd.", "success")
@@ -826,6 +1018,7 @@ def verstuur_alle_print_opdrachten():
     for item in items:
         sent, error_msg = send_queue_item_to_print_service(item)
         if sent:
+            _mark_card_printed(item)
             db.session.delete(item)
             success_count += 1
         else:
@@ -852,6 +1045,7 @@ def annuleren_print_opdracht(print_id):
         Print_Queue.bedrijf_id == bedrijf_id
     ).first()
     if item and item.status == 'PENDING':
+        _mark_card_cancelled(item)
         db.session.delete(item)
         db.session.commit()
         flash("Aanvraag geannuleerd.", "info")

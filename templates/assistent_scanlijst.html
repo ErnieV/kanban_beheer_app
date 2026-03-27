@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-qr-code-scan"></i> Scanlijst</h2>
+        <p class="text-muted mb-0">Overzicht van alle open gescande kanban-kaartjes voor het huidige bedrijf.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('assistent_scanlijst_print') }}" target="_blank" class="btn btn-outline-secondary">
+            <i class="bi bi-printer"></i> Printweergave
+        </a>
+        <form action="{{ url_for('assistent_scanlijst_reset') }}" method="POST" onsubmit="return confirm('Wil je de volledige scanlijst resetten voor dit bedrijf?');">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-danger">
+                <i class="bi bi-arrow-counterclockwise"></i> Reset lijst
+            </button>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Artikel</th>
+                        <th>Locatie</th>
+                        <th>Code</th>
+                        <th>Laatst gescand</th>
+                        <th>Aantal scans</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for scan_item, kaart in rows %}
+                    <tr>
+                        <td>
+                            <strong>{{ kaart.product_name }}</strong><br>
+                            <small class="text-muted">{{ kaart.product_sku or 'Geen SKU' }}</small>
+                        </td>
+                        <td>{{ kaart.location_text }}</td>
+                        <td><span class="font-monospace">{{ kaart.human_code }}</span></td>
+                        <td>{{ scan_item.last_scanned_at.strftime('%d-%m-%Y %H:%M') if scan_item.last_scanned_at else '-' }}</td>
+                        <td><span class="badge bg-success">{{ scan_item.scan_count }}</span></td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center py-5 text-muted">
+                            <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                            Er zijn nog geen open gescande kaartjes.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

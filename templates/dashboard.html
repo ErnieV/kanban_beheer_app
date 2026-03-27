@@ -46,6 +46,15 @@
                             </span>
                         {% endif %}
                     </a>
+                    <a href="{{ url_for('assistent_scanlijst') }}" class="btn btn-outline-success text-start position-relative">
+                        <i class="bi bi-qr-code-scan"></i> Scanlijst
+                        {% if open_scan_count > 0 %}
+                            <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
+                                {{ open_scan_count }}
+                                <span class="visually-hidden">gescande kaartjes</span>
+                            </span>
+                        {% endif %}
+                    </a>
                 </div>
             </div>
         </div>
