@@ -8,6 +8,8 @@ import json
 import datetime
 import base64
 import mimetypes
+import threading
+import time
 import requests
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
@@ -52,6 +54,7 @@ APP_BUILD_DATETIME = os.environ.get(
     'APP_BUILD_DATETIME',
     datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 )
+DEFAULT_LAYOUT_REFRESH_SECONDS = 300
 
 if not all([db_server, db_name, db_user, db_pass]):
     print("WAARSCHUWING: Database configuratie ontbreekt!")
@@ -79,6 +82,8 @@ Ruimte_Type = None
 Kast = None
 Print_Queue = None
 Leverancier = None
+PREVIEW_LAYOUT_CACHE = None
+PREVIEW_LAYOUT_LOCK = threading.Lock()
 
 with app.app_context():
     try:
@@ -294,6 +299,18 @@ def _print_service_root_url():
         return None
     return f"{parsed.scheme}://{parsed.netloc}/"
 
+def _print_service_api_base_url():
+    root_url = _print_service_root_url()
+    if not root_url:
+        return None
+    return root_url.rstrip('/')
+
+def _resolve_print_service_api_url(path):
+    base_url = _print_service_api_base_url()
+    if not base_url:
+        return None
+    return urllib.parse.urljoin(f"{base_url}/", path.lstrip('/'))
+
 def _print_service_headers():
     if PRINT_SERVICE_REQUIRE_API_KEY and not PRINT_SERVICE_API_KEY:
         return None, "PRINT_SERVICE_API_KEY ontbreekt terwijl API key verplicht is."
@@ -302,6 +319,109 @@ def _print_service_headers():
     if PRINT_SERVICE_API_KEY:
         headers["X-API-Key"] = PRINT_SERVICE_API_KEY
     return headers, None
+
+def _discover_preview_layout_endpoint():
+    headers, header_err = _print_service_headers()
+    if header_err:
+        raise RuntimeError(header_err)
+
+    request_format_url = _resolve_print_service_api_url('/api/v1/request-format')
+    if not request_format_url:
+        raise RuntimeError("PRINT_SERVICE_URL ontbreekt of is ongeldig.")
+
+    try:
+        response = requests.get(
+            request_format_url,
+            headers=headers,
+            timeout=PRINT_REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        body = response.json()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"request-format endpoint faalde: {exc}") from exc
+    except ValueError as exc:
+        raise RuntimeError("request-format endpoint gaf geen geldige JSON terug.") from exc
+
+    endpoint = body.get('previewLayoutEndpoint') or '/api/v1/layout-config'
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        endpoint = '/api/v1/layout-config'
+    return endpoint
+
+def _fetch_preview_layout_config(endpoint):
+    headers, header_err = _print_service_headers()
+    if header_err:
+        raise RuntimeError(header_err)
+
+    layout_url = _resolve_print_service_api_url(endpoint)
+    if not layout_url:
+        raise RuntimeError("PRINT_SERVICE_URL ontbreekt of is ongeldig.")
+
+    try:
+        response = requests.get(
+            layout_url,
+            headers=headers,
+            timeout=PRINT_REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        body = response.json()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"layout-config endpoint faalde: {exc}") from exc
+    except ValueError as exc:
+        raise RuntimeError("layout-config endpoint gaf geen geldige JSON terug.") from exc
+
+    refresh_seconds = body.get('suggestedRefreshIntervalSeconds')
+    if not isinstance(refresh_seconds, (int, float)) or refresh_seconds <= 0:
+        refresh_seconds = DEFAULT_LAYOUT_REFRESH_SECONDS
+
+    fetched_at = int(time.time())
+    return {
+        "endpoint": endpoint,
+        "layoutVersion": str(body.get('layoutVersion') or 'unknown'),
+        "template": body.get('template') or '',
+        "lastModifiedUtc": body.get('lastModifiedUtc'),
+        "config": body.get('config') or {},
+        "fetchedAt": fetched_at,
+        "nextRefreshAt": fetched_at + int(refresh_seconds),
+        "suggestedRefreshIntervalSeconds": int(refresh_seconds)
+    }
+
+def _get_preview_layout_cache():
+    with PREVIEW_LAYOUT_LOCK:
+        if PREVIEW_LAYOUT_CACHE is None:
+            return None
+        return dict(PREVIEW_LAYOUT_CACHE)
+
+def _set_preview_layout_cache(layout_cache):
+    global PREVIEW_LAYOUT_CACHE
+    with PREVIEW_LAYOUT_LOCK:
+        PREVIEW_LAYOUT_CACHE = dict(layout_cache)
+
+def get_preview_layout(force_refresh=False):
+    cached = _get_preview_layout_cache()
+    now = int(time.time())
+
+    if cached and not force_refresh and now <= cached.get('nextRefreshAt', 0):
+        return cached, False, None
+
+    endpoint = cached.get('endpoint') if cached else None
+    try:
+        if not endpoint:
+            endpoint = _discover_preview_layout_endpoint()
+        latest = _fetch_preview_layout_config(endpoint)
+        warning = None
+        if cached and latest.get('layoutVersion') != cached.get('layoutVersion'):
+            warning = (
+                f"Preview-layout bijgewerkt van versie {cached.get('layoutVersion')} "
+                f"naar {latest.get('layoutVersion')}."
+            )
+        _set_preview_layout_cache(latest)
+        return latest, False, warning
+    except RuntimeError as exc:
+        if cached:
+            return cached, True, f"Preview gebruikt verouderde layoutconfig: {exc}"
+        raise RuntimeError(
+            f"Geen layoutconfig beschikbaar. Controleer de printservice en probeer opnieuw. ({exc})"
+        ) from exc
 
 def test_print_service_connectivity():
     if not PRINT_SERVICE_URL:
@@ -584,16 +704,46 @@ def kanban_aanvragen_kast(kast_id):
 def assistent_print_queue():
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
+    preview_layout_warning = None
+    preview_layout_error = None
     
     queue_items = db.session.query(Print_Queue)\
         .filter(Print_Queue.bedrijf_id == bedrijf_id, Print_Queue.status == 'PENDING')\
         .order_by(Print_Queue.aangemaakt_op.desc()).all()
 
+    try:
+        _, stale_layout, layout_warning = get_preview_layout()
+        if stale_layout:
+            preview_layout_warning = layout_warning
+        elif layout_warning:
+            preview_layout_warning = layout_warning
+    except RuntimeError as exc:
+        preview_layout_error = str(exc)
+
     return render_template(
         'assistent_print_queue.html',
         queue_items=queue_items,
-        print_service_url=PRINT_SERVICE_URL
+        print_service_url=PRINT_SERVICE_URL,
+        preview_layout_warning=preview_layout_warning,
+        preview_layout_error=preview_layout_error
     )
+
+@app.route('/api/preview-layout')
+def api_preview_layout():
+    force_refresh = request.args.get('refresh') == '1'
+    try:
+        layout, stale, warning = get_preview_layout(force_refresh=force_refresh)
+        return jsonify({
+            "ok": True,
+            "stale": stale,
+            "warning": warning,
+            "layout": layout
+        })
+    except RuntimeError as exc:
+        return jsonify({
+            "ok": False,
+            "error": str(exc)
+        }), 503
 
 @app.route('/assistent/print-queue/test-verbinding', methods=['POST'])
 def test_print_verbinding():

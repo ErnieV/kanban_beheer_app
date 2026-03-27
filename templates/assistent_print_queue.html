@@ -34,6 +34,16 @@
     {% endif %}
 </div>
 
+{% if preview_layout_error %}
+<div class="alert alert-danger small">
+    <strong>Preview layout:</strong> {{ preview_layout_error }}
+</div>
+{% elif preview_layout_warning %}
+<div class="alert alert-warning small">
+    <strong>Preview layout:</strong> {{ preview_layout_warning }}
+</div>
+{% endif %}
+
 <div class="card shadow-sm">
     <div class="card-body p-0">
         <div class="table-responsive">
@@ -139,6 +149,7 @@
                                         data-packaging="{{ item.product_packaging }}"
                                         data-sku="{{ item.product_sku }}"
                                         data-img="{{ item.product_image_url }}"
+                                        data-logo="{{ item.company_logo_url }}"
                                         data-location="{{ item.location_text }}"
                                         data-min="{{ item.min_level }}"
                                         data-max="{{ item.max_level }}"
@@ -179,49 +190,11 @@
                 <h5 class="modal-title">Voorbeeld Kaartje</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body d-flex justify-content-center bg-light">
-                <!-- PREVIEW VAN HET KAARTJE (Badgy Formaat) -->
-                <div class="card shadow-sm bg-white position-relative" style="width: 250px; height: 390px; border: 1px solid #999;">
-                    <!-- Header -->
-                    <div id="modalHeader" class="text-white fw-bold text-center py-3 text-uppercase align-middle d-flex align-items-center justify-content-center" 
-                         style="background-color: #333; font-size: 1.1rem; height: 60px;">
-                        HEADER
-                    </div>
-                    
-                    <div class="card-body text-center p-3 d-flex flex-column h-100">
-                        <!-- Product -->
-                        <div class="mb-2">
-                            <h5 class="card-title fw-bold mb-0 text-truncate" id="modalProduct" style="font-size: 1.2rem;">Product</h5>
-                            <small class="text-muted" id="modalPackaging">Verpakking</small>
-                        </div>
-                        
-                        <!-- Plaatje -->
-                        <div class="flex-grow-1 d-flex align-items-center justify-content-center mb-2" style="max-height: 120px;">
-                            <img id="modalImg" src="" alt="Artikel" style="max-width: 100%; max-height: 100px; display: none;">
-                            <i id="modalNoImg" class="bi bi-box-seam text-secondary" style="font-size: 3rem; opacity: 0.2;"></i>
-                        </div>
-
-                        <!-- Info Bar -->
-                        <div class="row g-0 border-top border-bottom py-1 mb-3 bg-light text-dark" style="font-size: 0.8rem;">
-                            <div class="col-4 border-end pt-1">
-                                <div class="fw-bold">MIN</div>
-                                <div id="modalMin" class="fs-5">1</div>
-                            </div>
-                            <div class="col-4 border-end pt-1">
-                                <div class="fw-bold">MAX</div>
-                                <div id="modalMax" class="fs-5">5</div>
-                            </div>
-                            <div class="col-4 d-flex align-items-center justify-content-center px-1">
-                                <div id="modalLocation" class="fw-bold text-break" style="line-height: 1.1;">LOC</div>
-                            </div>
-                        </div>
-
-                        <!-- QR Footer -->
-                        <div class="mt-auto">
-                            <img id="modalQrImg" src="" alt="QR" style="width: 60px; height: 60px;">
-                            <div class="font-monospace fw-bold mt-1" id="modalHuman" style="font-size: 0.8rem;">CODE</div>
-                        </div>
-                    </div>
+            <div class="modal-body bg-light">
+                <div id="previewStatus" class="alert alert-warning small d-none mb-3"></div>
+                <div id="previewError" class="alert alert-danger small d-none mb-3"></div>
+                <div class="d-flex justify-content-center">
+                    <div id="previewCanvas" class="shadow-sm bg-white position-relative border rounded" style="width: 250px; height: 390px; overflow: hidden;"></div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -232,48 +205,254 @@
 </div>
 
 <script>
-    function showDetails(button) {
-        // Haal data op uit attributen
-        const d = button.dataset;
+    const previewState = {
+        layout: null,
+        modal: null
+    };
 
-        // Vul Header
-        const headerEl = document.getElementById('modalHeader');
-        headerEl.textContent = d.header;
-        headerEl.style.backgroundColor = d.color || '#333';
-
-        // Vul Product Data
-        document.getElementById('modalProduct').textContent = d.product;
-        document.getElementById('modalPackaging').textContent = d.packaging;
-        document.getElementById('modalLocation').textContent = d.location.split('(')[0]; // Alleen kastnaam
-        document.getElementById('modalMin').textContent = d.min;
-        document.getElementById('modalMax').textContent = d.max;
-        document.getElementById('modalHuman').textContent = d.human;
-
-        // Afbeelding handling
-        const imgEl = document.getElementById('modalImg');
-        const noImgEl = document.getElementById('modalNoImg');
-        
-        if (d.img && d.img !== 'None' && d.img.length > 5) {
-            imgEl.src = d.img;
-            imgEl.style.display = 'inline-block';
-            noImgEl.style.display = 'none';
-        } else {
-            imgEl.style.display = 'none';
-            noImgEl.style.display = 'inline-block';
-        }
-
-        // QR Code Generatie voor Modal
-        const qrEl = document.getElementById('modalQrImg');
-        if (d.qr && d.qr.includes('http')) {
-             qrEl.src = "https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=" + encodeURIComponent(d.qr);
-             qrEl.style.display = 'inline-block';
-        } else {
-             qrEl.style.display = 'none';
-        }
-
-        // Toon Modal
-        var myModal = new bootstrap.Modal(document.getElementById('detailsModal'));
-        myModal.show();
+    function toNumber(value, fallback) {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : fallback;
     }
+
+    function getByPath(obj, path) {
+        return path.split('.').reduce((acc, key) => (
+            acc && typeof acc === 'object' && key in acc ? acc[key] : undefined
+        ), obj);
+    }
+
+    function firstDefined(obj, paths, fallback = undefined) {
+        for (const path of paths) {
+            const value = getByPath(obj, path);
+            if (value !== undefined && value !== null && value !== '') {
+                return value;
+            }
+        }
+        return fallback;
+    }
+
+    function normalizeElements(config) {
+        const raw = firstDefined(config, ['elements', 'items', 'fields'], null);
+        if (Array.isArray(raw)) {
+            return raw.map((element, index) => ({ ...element, key: element.key || element.name || element.id || `item-${index}` }));
+        }
+        if (raw && typeof raw === 'object') {
+            return Object.entries(raw).map(([key, value]) => ({ ...(value || {}), key }));
+        }
+        return Object.entries(config || {})
+            .filter(([, value]) => value && typeof value === 'object' && !Array.isArray(value))
+            .map(([key, value]) => ({ ...(value || {}), key }));
+    }
+
+    function elementTokens(element) {
+        return [
+            element.key,
+            element.name,
+            element.id,
+            element.type,
+            element.role,
+            element.field
+        ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+    }
+
+    function elementMatches(element, aliases) {
+        const tokens = elementTokens(element);
+        return aliases.some((alias) => tokens.includes(alias));
+    }
+
+    function previewData(dataset) {
+        return {
+            header: dataset.header || '',
+            headerColor: dataset.color || '#333333',
+            productName: dataset.product || '',
+            packaging: dataset.packaging || '',
+            sku: dataset.sku || '',
+            productImage: dataset.img && dataset.img !== 'None' ? dataset.img : '',
+            companyLogo: dataset.logo && dataset.logo !== 'None' ? dataset.logo : '',
+            location: (dataset.location || '').split('(')[0].trim(),
+            locationRaw: dataset.location || '',
+            minLevel: dataset.min || '',
+            maxLevel: dataset.max || '',
+            qrCodeValue: dataset.qr || '',
+            humanReadableCode: dataset.human || ''
+        };
+    }
+
+    async function loadPreviewLayout(forceRefresh = false) {
+        if (previewState.layout && !forceRefresh) {
+            return { layout: previewState.layout, stale: false, warning: null };
+        }
+
+        const url = forceRefresh ? '/api/preview-layout?refresh=1' : '/api/preview-layout';
+        const response = await fetch(url, { credentials: 'same-origin' });
+        const body = await response.json();
+        if (!response.ok || !body.ok) {
+            throw new Error(body.error || 'Geen layoutconfig beschikbaar voor preview.');
+        }
+        previewState.layout = body.layout;
+        return body;
+    }
+
+    function setPreviewMessage(id, message) {
+        const el = document.getElementById(id);
+        if (!message) {
+            el.textContent = '';
+            el.classList.add('d-none');
+            return;
+        }
+        el.textContent = message;
+        el.classList.remove('d-none');
+    }
+
+    function applyBoxStyle(node, element) {
+        node.style.position = 'absolute';
+        node.style.left = `${toNumber(firstDefined(element, ['x', 'left'], 0), 0)}px`;
+        node.style.top = `${toNumber(firstDefined(element, ['y', 'top'], 0), 0)}px`;
+        node.style.width = `${toNumber(firstDefined(element, ['width', 'w'], 0), 0)}px`;
+        node.style.height = `${toNumber(firstDefined(element, ['height', 'h'], 0), 0)}px`;
+        node.style.color = firstDefined(element, ['textColor', 'color'], '#111111');
+        node.style.backgroundColor = firstDefined(element, ['backgroundColor', 'fill', 'colorBackground'], 'transparent');
+        node.style.fontSize = `${toNumber(firstDefined(element, ['fontSize', 'font.size'], 14), 14)}px`;
+        node.style.fontWeight = String(firstDefined(element, ['fontWeight', 'font.weight'], 400));
+        node.style.textAlign = firstDefined(element, ['textAlign', 'align'], 'left');
+        node.style.borderRadius = `${toNumber(firstDefined(element, ['borderRadius', 'radius'], 0), 0)}px`;
+        node.style.padding = `${toNumber(firstDefined(element, ['padding'], 0), 0)}px`;
+        node.style.overflow = 'hidden';
+        node.style.boxSizing = 'border-box';
+        node.style.whiteSpace = firstDefined(element, ['whiteSpace'], 'normal');
+        const borderWidth = toNumber(firstDefined(element, ['borderWidth'], 0), 0);
+        if (borderWidth > 0) {
+            node.style.border = `${borderWidth}px solid ${firstDefined(element, ['borderColor'], '#d1d5db')}`;
+        }
+    }
+
+    function valueForElement(element, data) {
+        if (elementMatches(element, ['header'])) return data.header;
+        if (elementMatches(element, ['productname', 'product-name', 'product name', 'name'])) return data.productName;
+        if (elementMatches(element, ['packaging', 'package'])) return data.packaging;
+        if (elementMatches(element, ['sku'])) return data.sku;
+        if (elementMatches(element, ['location'])) return data.location;
+        if (elementMatches(element, ['minlevel', 'min-level', 'min level'])) return String(data.minLevel);
+        if (elementMatches(element, ['maxlevel', 'max-level', 'max level'])) return String(data.maxLevel);
+        if (elementMatches(element, ['humanreadablecode', 'human-readable', 'human readable', 'code'])) return data.humanReadableCode;
+        return firstDefined(element, ['text', 'label', 'defaultText'], '');
+    }
+
+    function renderElement(root, element, data) {
+        if (elementMatches(element, ['logo'])) {
+            if (!data.companyLogo) return;
+            const img = document.createElement('img');
+            applyBoxStyle(img, element);
+            img.src = data.companyLogo;
+            img.alt = 'Logo';
+            img.style.objectFit = firstDefined(element, ['objectFit'], 'contain');
+            root.appendChild(img);
+            return;
+        }
+
+        if (elementMatches(element, ['image', 'productimage', 'product-image'])) {
+            if (!data.productImage) return;
+            const img = document.createElement('img');
+            applyBoxStyle(img, element);
+            img.src = data.productImage;
+            img.alt = data.productName || 'Artikel';
+            img.style.objectFit = firstDefined(element, ['objectFit'], 'contain');
+            root.appendChild(img);
+            return;
+        }
+
+        if (elementMatches(element, ['qr', 'qrcode', 'qr-code'])) {
+            if (!data.qrCodeValue) return;
+            const img = document.createElement('img');
+            applyBoxStyle(img, element);
+            const size = Math.max(
+                toNumber(firstDefined(element, ['width', 'w'], 80), 80),
+                toNumber(firstDefined(element, ['height', 'h'], 80), 80)
+            );
+            img.src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(data.qrCodeValue)}`;
+            img.alt = 'QR';
+            img.style.objectFit = 'contain';
+            root.appendChild(img);
+            return;
+        }
+
+        const text = valueForElement(element, data);
+        if (!text && firstDefined(element, ['backgroundColor', 'fill', 'borderWidth'], null) === null) {
+            return;
+        }
+
+        const node = document.createElement('div');
+        applyBoxStyle(node, element);
+        if (elementMatches(element, ['header'])) {
+            node.style.backgroundColor = data.headerColor || node.style.backgroundColor;
+            node.style.display = 'flex';
+            node.style.alignItems = 'center';
+            node.style.justifyContent = node.style.textAlign === 'center' ? 'center' : 'flex-start';
+            node.style.textTransform = 'uppercase';
+        }
+        if (elementMatches(element, ['humanreadablecode', 'human-readable', 'human readable', 'code'])) {
+            node.style.fontFamily = 'monospace';
+        }
+        node.textContent = text;
+        root.appendChild(node);
+    }
+
+    function renderPreview(layout, data) {
+        const canvas = document.getElementById('previewCanvas');
+        const config = (layout && layout.config) || {};
+        const width = toNumber(firstDefined(config, ['card.width', 'canvas.width', 'page.width', 'width'], 250), 250);
+        const height = toNumber(firstDefined(config, ['card.height', 'canvas.height', 'page.height', 'height'], 390), 390);
+        const backgroundColor = firstDefined(config, ['card.backgroundColor', 'canvas.backgroundColor', 'backgroundColor'], '#ffffff');
+        const borderRadius = toNumber(firstDefined(config, ['card.borderRadius', 'borderRadius'], 4), 4);
+        const elements = normalizeElements(config);
+
+        canvas.innerHTML = '';
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        canvas.style.backgroundColor = backgroundColor;
+        canvas.style.borderRadius = `${borderRadius}px`;
+
+        elements
+            .sort((a, b) => toNumber(firstDefined(a, ['zIndex'], 0), 0) - toNumber(firstDefined(b, ['zIndex'], 0), 0))
+            .forEach((element) => renderElement(canvas, element, data));
+
+        if (!elements.length) {
+            const fallback = document.createElement('div');
+            fallback.className = 'h-100 d-flex align-items-center justify-content-center text-muted text-center px-3';
+            fallback.textContent = 'Geen bruikbare layoutconfig ontvangen voor preview.';
+            canvas.appendChild(fallback);
+        }
+    }
+
+    async function showDetails(button) {
+        const data = previewData(button.dataset);
+        setPreviewMessage('previewStatus', '');
+        setPreviewMessage('previewError', '');
+
+        try {
+            const result = await loadPreviewLayout(true);
+            renderPreview(result.layout, data);
+            if (result.stale) {
+                setPreviewMessage('previewStatus', result.warning || 'Preview gebruikt mogelijk een verouderde layoutconfig.');
+            } else if (result.warning) {
+                setPreviewMessage('previewStatus', result.warning);
+            }
+        } catch (error) {
+            document.getElementById('previewCanvas').innerHTML = '';
+            setPreviewMessage('previewError', `${error.message} Preview kan niet betrouwbaar worden getoond.`);
+        }
+
+        if (!previewState.modal) {
+            previewState.modal = new bootstrap.Modal(document.getElementById('detailsModal'));
+        }
+        previewState.modal.show();
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        loadPreviewLayout(false).catch(() => null);
+    });
 </script>
 {% endblock %}
