@@ -6,6 +6,8 @@ import hmac
 import secrets
 import json
 import datetime
+import base64
+import mimetypes
 import requests
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
@@ -45,6 +47,11 @@ PRINT_SERVICE_API_KEY = os.environ.get('PRINT_SERVICE_API_KEY')
 PRINT_SERVICE_REQUIRE_API_KEY = os.environ.get('PRINT_SERVICE_REQUIRE_API_KEY', '1') == '1'
 PRINT_CONNECT_TIMEOUT = float(os.environ.get('PRINT_CONNECT_TIMEOUT', '3'))
 PRINT_REQUEST_TIMEOUT = float(os.environ.get('PRINT_REQUEST_TIMEOUT', '10'))
+APP_VERSION = os.environ.get('APP_VERSION', 'dev')
+APP_BUILD_DATETIME = os.environ.get(
+    'APP_BUILD_DATETIME',
+    datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+)
 
 if not all([db_server, db_name, db_user, db_pass]):
     print("WAARSCHUWING: Database configuratie ontbreekt!")
@@ -99,7 +106,12 @@ with app.app_context():
 def inject_context():
     """Zorgt dat bedrijfsdata beschikbaar is in ALLE templates (voor menu)."""
     if not db_operational or not Bedrijf:
-        return dict(huidig_bedrijf=None, alle_bedrijven=[])
+        return dict(
+            huidig_bedrijf=None,
+            alle_bedrijven=[],
+            app_version=APP_VERSION,
+            app_build_datetime=APP_BUILD_DATETIME
+        )
     
     # Huidig bedrijf ophalen
     bedrijf_id = get_huidig_bedrijf_id()
@@ -108,7 +120,12 @@ def inject_context():
     # NIEUW: Alle bedrijven ophalen voor de selector in de navbar
     alle_bedrijven = db.session.query(Bedrijf).order_by(Bedrijf.naam).all()
     
-    return dict(huidig_bedrijf=bedrijf, alle_bedrijven=alle_bedrijven)
+    return dict(
+        huidig_bedrijf=bedrijf,
+        alle_bedrijven=alle_bedrijven,
+        app_version=APP_VERSION,
+        app_build_datetime=APP_BUILD_DATETIME
+    )
 
 def get_huidig_bedrijf_id():
     bedrijf_id = session.get('bedrijf_id')
@@ -175,7 +192,7 @@ def upload_image_to_azure(file):
 
 # --- HELPERS ---
 
-def create_queue_item(pos, art, kast, ruimte, r_type, bedrijf):
+def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
     header_text = ruimte.naam.upper()
     if ruimte.nummer: header_text = f"{ruimte.nummer} {header_text}"
     
@@ -189,7 +206,7 @@ def create_queue_item(pos, art, kast, ruimte, r_type, bedrijf):
         product_name=art.eigen_naam,
         product_packaging=art.verpakkingseenheid_tekst or "Stuk",
         product_sku=str(art.lokaal_artikel_id),
-        product_image_url=pos.locatie_foto_url or art.foto_url,
+        product_image_url=pos.locatie_foto_url or art.foto_url or (global_item.foto_url if global_item else None),
         location_text=f"{kast.naam} ({kast.type_opslag})",
         min_level=pos.trigger_min,
         max_level=pos.target_max,
@@ -198,7 +215,50 @@ def create_queue_item(pos, art, kast, ruimte, r_type, bedrijf):
         company_logo_url=bedrijf.logo_url
     )
 
+def _image_to_base64_object(image_source, label):
+    if not image_source:
+        return None, f"{label} ontbreekt."
+
+    if isinstance(image_source, str) and image_source.startswith("data:image/"):
+        return {"base64Data": image_source}, None
+
+    try:
+        response = requests.get(image_source, timeout=PRINT_REQUEST_TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return None, f"{label} kon niet worden opgehaald: {exc}"
+
+    content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+    if not content_type.startswith("image/"):
+        guessed_type, _ = mimetypes.guess_type(image_source)
+        content_type = guessed_type or "image/png"
+
+    encoded = base64.b64encode(response.content).decode("ascii")
+    return {"base64Data": f"data:{content_type};base64,{encoded}"}, None
+
 def _build_print_payload(queue_item):
+    product = {
+        "name": queue_item.product_name or "",
+        "packaging": queue_item.product_packaging or "Stuk",
+        "sku": queue_item.product_sku or ""
+    }
+    product_image, product_image_error = _image_to_base64_object(
+        queue_item.product_image_url,
+        "Productafbeelding"
+    )
+    if product_image_error:
+        return None, product_image_error
+    product["image"] = product_image
+
+    company = {}
+    company_logo, company_logo_error = _image_to_base64_object(
+        queue_item.company_logo_url,
+        "Bedrijfslogo"
+    )
+    if company_logo_error:
+        return None, company_logo_error
+    company["logo"] = company_logo
+
     return {
         "printerId": queue_item.printer_id or "reception-badgy-01",
         "cardType": queue_item.card_type or "KANBAN_TWO_BIN",
@@ -208,15 +268,8 @@ def _build_print_payload(queue_item):
                 "color": queue_item.header_color or "#3B82F6",
                 "textColor": "#FFFFFF"
             },
-            "product": {
-                "name": queue_item.product_name or "",
-                "packaging": queue_item.product_packaging or "Stuk",
-                "sku": queue_item.product_sku or "",
-                "imageUrl": queue_item.product_image_url
-            },
-            "company": {
-                "logoUrl": queue_item.company_logo_url
-            },
+            "product": product,
+            "company": company,
             "logistics": {
                 "location": queue_item.location_text or "",
                 "minLevel": int(queue_item.min_level or 0),
@@ -231,7 +284,7 @@ def _build_print_payload(queue_item):
             "orientation": "portrait",
             "doubleSided": False
         }
-    }
+    }, None
 
 def _print_service_root_url():
     if not PRINT_SERVICE_URL:
@@ -282,7 +335,9 @@ def send_queue_item_to_print_service(queue_item):
     if not PRINT_SERVICE_URL:
         return False, "PRINT_SERVICE_URL ontbreekt."
 
-    payload = _build_print_payload(queue_item)
+    payload, payload_error = _build_print_payload(queue_item)
+    if payload_error:
+        return False, payload_error
     headers, header_err = _print_service_headers()
     if header_err:
         return False, header_err
@@ -463,8 +518,9 @@ def kanban_aanvragen_enkel(voorraad_positie_id):
         return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
     try:
-        result = db.session.query(Voorraad_Positie, Lokaal_Artikel, Kast, Ruimte, Ruimte_Type, Bedrijf)\
+        result = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus, Kast, Ruimte, Ruimte_Type, Bedrijf)\
             .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
+            .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
             .join(Kast, Voorraad_Positie.kast_id == Kast.kast_id)\
             .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
             .outerjoin(Ruimte_Type, Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id)\
@@ -496,8 +552,9 @@ def kanban_aanvragen_kast(kast_id):
         return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
     try:
-        results = db.session.query(Voorraad_Positie, Lokaal_Artikel, Kast, Ruimte, Ruimte_Type, Bedrijf)\
+        results = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus, Kast, Ruimte, Ruimte_Type, Bedrijf)\
             .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
+            .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
             .join(Kast, Voorraad_Positie.kast_id == Kast.kast_id)\
             .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
             .outerjoin(Ruimte_Type, Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id)\
