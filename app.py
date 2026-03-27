@@ -230,7 +230,6 @@ def generate_csrf_token():
     return token
 
 app.jinja_env.globals['csrf_token'] = generate_csrf_token
-app.jinja_env.filters['localdt'] = format_local_dt
 
 @app.before_request
 def csrf_protect():
@@ -267,6 +266,9 @@ def format_local_dt(value, fmt='%d-%m-%Y %H:%M'):
     if value.tzinfo is None:
         value = value.replace(tzinfo=datetime.timezone.utc)
     return value.astimezone(ZoneInfo(APP_TIMEZONE)).strftime(fmt)
+
+
+app.jinja_env.filters['localdt'] = format_local_dt
 
 
 def _generate_human_code():
