@@ -627,11 +627,23 @@ def test_print_service_connectivity():
         return False, f"Poortcheck mislukt op {parsed.hostname}:{port} ({exc})."
 
     try:
-        root_url = _print_service_root_url()
         headers, header_err = _print_service_headers()
         if header_err:
             return False, header_err
-        resp = requests.get(root_url, headers=headers, timeout=PRINT_REQUEST_TIMEOUT)
+
+        health_url = _resolve_print_service_api_url('/health') or _print_service_root_url()
+        resp = requests.get(
+            health_url,
+            headers=headers,
+            timeout=PRINT_REQUEST_TIMEOUT,
+            allow_redirects=False
+        )
+        if 300 <= resp.status_code < 400:
+            location = resp.headers.get('Location', '(onbekend)')
+            return False, (
+                f"Service health-check redirect ({resp.status_code}) naar {location}. "
+                "Controleer PRINT_SERVICE_URL."
+            )
         if resp.status_code >= 400:
             return False, f"Service bereikbaar, maar health-check gaf HTTP {resp.status_code}."
     except requests.RequestException as exc:
@@ -655,9 +667,42 @@ def send_queue_item_to_print_service(queue_item):
             PRINT_SERVICE_URL,
             json=payload,
             headers=headers,
-            timeout=PRINT_REQUEST_TIMEOUT
+            timeout=PRINT_REQUEST_TIMEOUT,
+            allow_redirects=False
         )
+        if 300 <= response.status_code < 400:
+            location = response.headers.get('Location', '(onbekend)')
+            return False, (
+                f"Printservice redirect ({response.status_code}) naar {location}. "
+                "Controleer PRINT_SERVICE_URL."
+            )
+
         response.raise_for_status()
+
+        try:
+            response_body = response.json()
+        except ValueError:
+            response_body = None
+
+        if isinstance(response_body, dict):
+            if response_body.get('detail'):
+                return False, f"Printservice melding: {response_body.get('detail')}"
+
+            status = str(response_body.get('status') or '').upper()
+            if status and status not in {'QUEUED', 'ACCEPTED', 'PRINTING', 'COMPLETED'}:
+                return False, f"Printservice gaf onverwachte status: {status}."
+
+            job_id = response_body.get('jobId')
+            if status or job_id:
+                app.logger.info(
+                    "Printservice accepted job",
+                    extra={
+                        "print_job_id": job_id,
+                        "print_job_status": status,
+                        "printer_id": payload.get('printerId')
+                    }
+                )
+
         return True, None
     except requests.RequestException as exc:
         return False, f"Printservice fout: {exc}"
