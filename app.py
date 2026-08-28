@@ -10,6 +10,7 @@ import base64
 import mimetypes
 import threading
 import time
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 import requests
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, abort
@@ -115,6 +116,12 @@ class KanbanScanlijstItem(db.Model):
     scan_count = db.Column(db.Integer, nullable=False, default=1)
     reset_at = db.Column(db.DateTime, nullable=True)
     reset_by = db.Column(db.String(255), nullable=True)
+
+
+class QueueItemSource(NamedTuple):
+    card: object
+    position: object
+    article: object
 
 
 def ensure_scan_schema():
@@ -700,7 +707,7 @@ def _get_queue_card(queue_item):
 
 def _mark_card_printed(queue_item, source_map=None):
     source = source_map.get(getattr(queue_item, 'kaart_id', None)) if source_map is not None else None
-    card = source[0] if source else _get_queue_card(queue_item)
+    card = source.card if source else _get_queue_card(queue_item)
     if not card or getattr(card, 'status', None) == 'SUPERSEDED':
         return
     card.status = 'PRINTED'
@@ -747,7 +754,18 @@ def _queue_item_sources(queue_items):
     if not kaart_ids:
         return {}
 
-    rows = db.session.query(
+    rows = _queue_item_source_query().filter(
+        KanbanKaart.kaart_id.in_(kaart_ids),
+    ).all()
+    sources = [QueueItemSource(*row) for row in rows]
+    return {
+        row.card.kaart_id: row
+        for row in sources
+    }
+
+
+def _queue_item_source_query():
+    return db.session.query(
         KanbanKaart,
         Voorraad_Positie,
         Lokaal_Artikel,
@@ -759,42 +777,24 @@ def _queue_item_sources(queue_items):
         Lokaal_Artikel,
         Voorraad_Positie.lokaal_artikel_id
         == Lokaal_Artikel.lokaal_artikel_id,
-    ).filter(
-        KanbanKaart.kaart_id.in_(kaart_ids),
-    ).all()
-    return {
-        card.kaart_id: (card, position, article)
-        for card, position, article in rows
-    }
+    )
 
 
 def _queue_item_source(queue_item, source_map=None):
     kaart_id = getattr(queue_item, 'kaart_id', None)
     if source_map is not None:
         source = source_map.get(kaart_id)
-        return (source[1], source[2]) if source else (None, None)
+        return (source.position, source.article) if source else (None, None)
 
     query = getattr(db.session, 'query', None)
     if kaart_id and query and Voorraad_Positie and Lokaal_Artikel:
-        row = query(
-            KanbanKaart,
-            Voorraad_Positie,
-            Lokaal_Artikel,
-        ).outerjoin(
-            Voorraad_Positie,
-            KanbanKaart.voorraad_positie_id
-            == Voorraad_Positie.voorraad_positie_id,
-        ).outerjoin(
-            Lokaal_Artikel,
-            Voorraad_Positie.lokaal_artikel_id
-            == Lokaal_Artikel.lokaal_artikel_id,
-        ).filter(
+        row = _queue_item_source_query().filter(
             KanbanKaart.kaart_id == kaart_id,
         ).first()
         if row:
-            _, position, article = row
-            if position and article:
-                return position, article
+            source = QueueItemSource(*row)
+            if source.position and source.article:
+                return source.position, source.article
 
     return None, None
 
@@ -848,7 +848,7 @@ def _queue_item_display_values(queue_item, source_map=None):
 
 def _queue_item_is_superseded(queue_item, source_map=None):
     source = source_map.get(getattr(queue_item, 'kaart_id', None)) if source_map is not None else None
-    card = source[0] if source else _get_queue_card(queue_item)
+    card = source.card if source else _get_queue_card(queue_item)
     return bool(card and getattr(card, 'status', None) == 'SUPERSEDED')
 
 
