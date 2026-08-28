@@ -704,6 +704,26 @@ def _position_ids_for_article(article_id):
     ]
 
 
+def _position_ids_for_global_item(global_id, fallback_attribute):
+    query_factory = getattr(db.session, 'query', None)
+    if not query_factory or not Voorraad_Positie or not Lokaal_Artikel:
+        return []
+    fallback_column = getattr(Lokaal_Artikel, fallback_attribute)
+    rows = query_factory(Voorraad_Positie).join(
+        Lokaal_Artikel,
+        Voorraad_Positie.lokaal_artikel_id
+        == Lokaal_Artikel.lokaal_artikel_id,
+    ).filter(
+        Lokaal_Artikel.global_id == global_id,
+        or_(fallback_column.is_(None), fallback_column == ''),
+    ).all()
+    return [
+        position.voorraad_positie_id
+        for position in rows
+        if hasattr(position, 'voorraad_positie_id')
+    ]
+
+
 def _position_ids_with_changed_article_standard(
     article_id,
     old_standard,
@@ -2304,13 +2324,30 @@ def beheer_catalogus():
             global_id = request.form.get('global_id', type=int)
             item = db.session.query(Global_Catalogus).filter(Global_Catalogus.global_id == global_id).first()
             if item:
+                old_name = item.generieke_naam
+                old_photo = item.foto_url
+                new_photo = old_photo
                 item.generieke_naam = request.form.get('naam')
                 item.ean_code = request.form.get('ean')
                 item.categorie = request.form.get('categorie')
                 file = request.files.get('afbeelding')
                 if file:
                     url = upload_image_to_azure(file)
-                    if url and "ERROR" not in url: item.foto_url = url
+                    if url and "ERROR" not in url:
+                        new_photo = url
+                item.foto_url = new_photo
+                location_card_position_ids = set()
+                if old_name != item.generieke_naam:
+                    location_card_position_ids.update(
+                        _position_ids_for_global_item(global_id, 'eigen_naam')
+                    )
+                if old_photo != new_photo:
+                    location_card_position_ids.update(
+                        _position_ids_for_global_item(global_id, 'foto_url')
+                    )
+                _supersede_locatiekaart_versions_for_position_ids(
+                    location_card_position_ids
+                )
                 db.session.commit()
                 flash('Global item bijgewerkt', 'success')
         elif actie == 'verwijder_global':

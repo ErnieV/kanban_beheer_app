@@ -1,4 +1,5 @@
 import datetime
+import io
 from types import SimpleNamespace
 
 import pytest
@@ -214,6 +215,89 @@ def test_storage_location_rename_supersedes_location_card_versions(
     assert response.status_code == 302
     assert storage_location.naam == "Kast B"
     assert superseded_position_ids == [12]
+
+
+def test_catalog_photo_change_supersedes_only_fallback_location_cards(
+    app_module,
+    monkeypatch,
+):
+    global_item = SimpleNamespace(
+        global_id=8,
+        generieke_naam="Catalogusverband",
+        foto_url="old.png",
+    )
+    superseded_position_ids = []
+
+    class FakeColumn:
+        def __eq__(self, other):
+            return True
+
+    class FakeSession:
+        def query(self, model):
+            return _CatalogQuery(global_item)
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "upload_image_to_azure", lambda file: "new.png")
+    monkeypatch.setattr(
+        app_module,
+        "Global_Catalogus",
+        SimpleNamespace(global_id=FakeColumn()),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_position_ids_for_global_item",
+        lambda global_id, fallback_attribute: (
+            [12] if fallback_attribute == "foto_url" else []
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_supersede_locatiekaart_versions_for_position_ids",
+        lambda position_ids: superseded_position_ids.extend(position_ids),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/beheer/catalogus",
+        data={
+            "_csrf_token": "test-csrf",
+            "actie": "bewerk_global",
+            "global_id": "8",
+            "naam": "Catalogusverband",
+            "ean": "123",
+            "categorie": "zorg",
+            "afbeelding": (io.BytesIO(b"image"), "photo.png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302
+    assert global_item.foto_url == "new.png"
+    assert superseded_position_ids == [12]
+
+
+class _CatalogQuery:
+    def __init__(self, global_item):
+        self.global_item = global_item
+
+    def filter(self, *conditions):
+        return self
+
+    def join(self, *args):
+        return self
+
+    def first(self):
+        return self.global_item
+
+    def all(self):
+        return []
 
 
 def test_new_position_defaults_to_kanban_material(app_module, monkeypatch):
