@@ -800,6 +800,7 @@ def test_user_facing_print_route_sends_to_fake_print_service(
         print_id=7,
         bedrijf_id=1,
         status="PENDING",
+        kaart_id="kaart-7",
         printer_id="reception-badgy-01",
         card_type="KANBAN_TWO_BIN",
         header_text="KAMER",
@@ -810,8 +811,8 @@ def test_user_facing_print_route_sends_to_fake_print_service(
         product_image_url="data:image/png;base64,AA==",
         company_logo_url="data:image/png;base64,AA==",
         location_text="Kast A",
-        min_level=3,
-        refill_quantity=4,
+        min_level=99,
+        refill_quantity=99,
         qr_code_value="https://example.test/scan/token",
         qr_human_readable="KB-1234",
     )
@@ -827,9 +828,45 @@ def test_user_facing_print_route_sends_to_fake_print_service(
         def first(self):
             return queue_item
 
+    card = SimpleNamespace(
+        kaart_id="kaart-7",
+        voorraad_positie_id=12,
+        status="PENDING_PRINT",
+    )
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        lokaal_artikel_id=7,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+
+    class SourceQuery:
+        def outerjoin(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return card, position, article
+
+    class CardQuery(QueueQuery):
+        def first(self):
+            return card
+
     class FakeSession:
         def query(self, *models):
-            return QueueQuery()
+            if models and models[0] is app_module.Print_Queue:
+                return QueueQuery()
+            if len(models) == 1:
+                return CardQuery()
+            return SourceQuery()
 
         def delete(self, item):
             captured["deleted"] = item
@@ -869,6 +906,27 @@ def test_user_facing_print_route_sends_to_fake_print_service(
             status=FakeField(),
         ),
     )
+    monkeypatch.setattr(
+        app_module,
+        "KanbanKaart",
+        SimpleNamespace(
+            kaart_id=FakeField(),
+            voorraad_positie_id=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Voorraad_Positie",
+        SimpleNamespace(
+            voorraad_positie_id=FakeField(),
+            lokaal_artikel_id=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Lokaal_Artikel",
+        SimpleNamespace(lokaal_artikel_id=FakeField()),
+    )
     monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
 
     response = _csrf_client(app_module).post(
@@ -879,6 +937,7 @@ def test_user_facing_print_route_sends_to_fake_print_service(
     assert response.status_code == 302
     assert captured["deleted"] is queue_item
     assert captured["committed"] is True
+    assert card.status == "PRINTED"
     assert captured["payload"]["data"]["logistics"] == {
         "location": "Kast A",
         "minLevel": 3,

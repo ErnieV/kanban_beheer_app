@@ -333,12 +333,23 @@
         var changed = newMin !== articleImpactState.originalMin || newRefill !== articleImpactState.originalRefill
         var minChanged = newMin !== articleImpactState.originalMin
         var refillChanged = newRefill !== articleImpactState.originalRefill
+        var minAffected = minChanged ? articleImpactState.items.filter(item =>
+            item.materiaaltype === 'KANBAN' && item.min_erft_standaard
+        ).length : 0
+        var refillAffected = refillChanged ? articleImpactState.items.filter(item =>
+            item.materiaaltype === 'KANBAN' && item.aanv_erft_standaard
+        ).length : 0
         var affected = changed ? articleImpactState.items.filter(item =>
             item.materiaaltype === 'KANBAN' &&
             ((minChanged && item.min_erft_standaard) ||
              (refillChanged && item.aanv_erft_standaard))
         ).length : 0
-        return { changed: changed, affected: affected }
+        return {
+            changed: changed,
+            affected: affected,
+            minAffected: minAffected,
+            refillAffected: refillAffected
+        }
     }
 
     function renderArticleImpact() {
@@ -350,7 +361,10 @@
         } else if (summary.affected === 0) {
             impact.textContent = 'Geen Kanban-posities nemen een nieuwe standaardwaarde over; lokale instellingen blijven ongewijzigd.'
         } else {
-            impact.textContent = summary.affected + ' Kanban-positie(s) nemen de nieuwe standaardwaarde automatisch over.'
+            var details = []
+            if (summary.minAffected) details.push('Min: ' + summary.minAffected)
+            if (summary.refillAffected) details.push('Aanv.: ' + summary.refillAffected)
+            impact.textContent = summary.affected + ' Kanban-positie(s) nemen de nieuwe standaardwaarde automatisch over (' + details.join(', ') + ').'
         }
     }
 
