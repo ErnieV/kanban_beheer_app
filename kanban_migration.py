@@ -17,7 +17,11 @@ from sqlalchemy import (
     update,
 )
 
-from kanban_domain import KanbanStandard, Materiaaltype
+from kanban_domain import (
+    KanbanStandard,
+    Materiaaltype,
+    normalized_position_overrides,
+)
 
 
 MIGRATION_NAME = "legacy-max-to-kanban-standard-v1"
@@ -217,16 +221,18 @@ def build_migration_plan(position_rows, queue_rows):
     position_updates = []
     for row, old_min, refill_quantity in candidates:
         standard = standards[row.article_id]
-        is_deviation = (old_min, refill_quantity) != (
-            standard.min_level,
-            standard.refill_quantity,
+        min_override, refill_override = normalized_position_overrides(
+            Materiaaltype.KANBAN,
+            standard,
+            old_min,
+            refill_quantity,
         )
         position_updates.append(PositionMigrationUpdate(
             position_id=row.position_id,
             material_type=Materiaaltype.KANBAN.value,
             strategy="TWO_BIN",
-            min_override=old_min if is_deviation else None,
-            refill_override=refill_quantity if is_deviation else None,
+            min_override=min_override,
+            refill_override=refill_override,
         ))
 
     return MigrationPlan(

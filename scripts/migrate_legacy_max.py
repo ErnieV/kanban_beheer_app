@@ -6,13 +6,14 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import db
+from app import app, db
 from kanban_migration import MigrationError, migrate_legacy_max
 
 
 def main():
     try:
-        result = migrate_legacy_max(db.engine)
+        with app.app_context():
+            result = migrate_legacy_max(db.engine)
     except MigrationError as exc:
         print(f"Migratie niet uitgevoerd: {exc}")
         return 2

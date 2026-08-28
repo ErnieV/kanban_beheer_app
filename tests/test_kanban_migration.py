@@ -1,3 +1,7 @@
+from types import SimpleNamespace
+
+import pytest
+from flask import has_app_context
 from sqlalchemy import create_engine, inspect, text
 
 from kanban_domain import KanbanStandard
@@ -7,6 +11,16 @@ from kanban_migration import (
     migrate_legacy_max,
     select_article_standard,
 )
+
+
+@pytest.fixture
+def app_module(monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "test-secret-key-123456789012345678901234")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    import app
+
+    app.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
+    return app
 
 
 def test_article_standard_selection_uses_frequency_then_tie_breakers():
@@ -20,6 +34,7 @@ def test_migration_plan_preserves_nonstandard_pairs_as_local_deviations():
         LegacyPositionRecord(1, 10, "Verband", "Kast A", "KANBAN", 1, 3),
         LegacyPositionRecord(2, 10, "Verband", "Kast B", "KANBAN", 1, 3),
         LegacyPositionRecord(3, 10, "Verband", "Kast C", "KANBAN", 2, 5),
+        LegacyPositionRecord(5, 10, "Verband", "Kast E", "KANBAN", 1, 4),
         LegacyPositionRecord(4, 20, "Naalden", "Kast D", "STANDAARD", 9, 2),
     ]
 
@@ -31,7 +46,9 @@ def test_migration_plan_preserves_nonstandard_pairs_as_local_deviations():
     assert plan.position_updates[0].refill_override is None
     assert plan.position_updates[2].min_override == 2
     assert plan.position_updates[2].refill_override == 3
-    assert len(plan.position_updates) == 3
+    assert plan.position_updates[3].min_override is None
+    assert plan.position_updates[3].refill_override == 3
+    assert len(plan.position_updates) == 4
 
 
 def test_invalid_legacy_values_block_before_cutover():
@@ -116,6 +133,25 @@ def test_invalid_database_migration_keeps_legacy_schema_and_reports_location():
             "FROM Lokaal_Artikel WHERE lokaal_artikel_id = 10"
         )).one()
     assert tuple(article) == (None, None)
+
+
+def test_migration_cli_uses_the_flask_application_context(app_module, monkeypatch):
+    from scripts import migrate_legacy_max as cli
+
+    engine = object()
+    captured = []
+
+    def fake_migration(received_engine):
+        assert has_app_context() is True
+        captured.append(received_engine)
+        return SimpleNamespace(already_completed=True, blocked=False)
+
+    monkeypatch.setattr(cli, "app", app_module.app)
+    monkeypatch.setattr(cli, "db", SimpleNamespace(engine=engine))
+    monkeypatch.setattr(cli, "migrate_legacy_max", fake_migration)
+
+    assert cli.main() == 0
+    assert captured == [engine]
 
 
 def _legacy_engine():
