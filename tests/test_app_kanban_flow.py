@@ -535,7 +535,8 @@ def test_storage_location_page_renders_effective_kanban_values(
     assert "Kast A" in html
     assert "Min 3" in html
     assert "Aanv. 4" in html
-    assert "Max" not in html
+    assert "Max:" not in html
+    assert '"maxLevel"' not in html
 
 
 def test_effective_change_supersedes_existing_kanban_card(
@@ -1157,6 +1158,145 @@ def test_print_queue_view_precomputes_linked_card_settings(
     assert "Aanv. 4" in html
     assert "Min 99" not in html
     assert "Aanv. 99" not in html
+
+
+def test_room_page_renders_effective_kanban_values(
+    app_module, monkeypatch
+):
+    room = SimpleNamespace(
+        ruimte_id=9,
+        bedrijf_id=1,
+        ruimte_type_id=8,
+        nummer=None,
+        naam="Behandelkamer",
+        kleur_hex=None,
+    )
+    room_type = SimpleNamespace(kleur_hex="#123456")
+    class FakeKast:
+        kast_id = 4
+        ruimte_id = 9
+        naam = "Kast A"
+        type_opslag = "GRIJP"
+
+    storage_location = FakeKast()
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        eigen_naam="Verband",
+        verpakkingseenheid_tekst="doos",
+        foto_url=None,
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+    class Query:
+        def __init__(self, first_value=None, all_values=None):
+            self.first_value = first_value
+            self.all_values = all_values or []
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def filter_by(self, **kwargs):
+            return self
+
+        def join(self, *args, **kwargs):
+            return self
+
+        def outerjoin(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return self.first_value
+
+        def all(self):
+            return self.all_values
+
+    monkeypatch.setattr(
+        app_module,
+        "Ruimte",
+        SimpleNamespace(ruimte_id=FakeField(), bedrijf_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Ruimte_Type",
+        SimpleNamespace(ruimte_type_id=FakeField(), bedrijf_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Kast",
+        SimpleNamespace(
+            kast_id=FakeField(),
+            ruimte_id=FakeField(),
+            bedrijf_id=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Voorraad_Positie",
+        SimpleNamespace(
+            lokaal_artikel_id=FakeField(),
+            kast_id=FakeField(),
+            bedrijf_id=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Lokaal_Artikel",
+        SimpleNamespace(
+            lokaal_artikel_id=FakeField(),
+            global_id=FakeField(),
+            eigen_naam=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Global_Catalogus",
+        SimpleNamespace(global_id=FakeField()),
+    )
+
+    class FakeSession:
+        def query(self, *models):
+            model = models[0] if models else None
+            if model is app_module.Ruimte:
+                return Query(first_value=room)
+            if model is app_module.Ruimte_Type:
+                return Query(first_value=room_type)
+            if model is app_module.Kast:
+                return Query(all_values=[storage_location])
+            if len(models) == 3:
+                return Query(all_values=[(position, article, None)])
+            if model is app_module.Lokaal_Artikel:
+                return Query(all_values=[article])
+            return Query()
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = app_module.app.test_client().get("/assistent/kamer/9")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Behandelkamer" in html
+    assert 'value="3"' in html
+    assert 'value="4"' in html
+    assert "Max:" not in html
 
 
 def test_inventory_and_scan_reports_render_effective_kanban_values(
