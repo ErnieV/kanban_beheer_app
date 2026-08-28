@@ -711,7 +711,12 @@ def send_queue_item_to_print_service(queue_item):
 
 @app.route('/')
 def dashboard():
-    if not check_db(): return render_template('dashboard.html')
+    if not check_db():
+        return render_template(
+            'dashboard.html',
+            print_queue_count=0,
+            open_scan_count=0
+        )
     
     # Count voor print wachtrij (alleen voor huidig bedrijf)
     print_queue_count = 0
