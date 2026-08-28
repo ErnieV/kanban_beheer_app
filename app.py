@@ -1249,6 +1249,69 @@ def assistent_kamers():
         print(f"Error: {e}")
         return redirect(url_for('dashboard'))
 
+
+@app.route('/assistent/kasten')
+def kast_selectie():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    kasten = db.session.query(Kast, Ruimte, Vestiging).join(
+        Ruimte,
+        Kast.ruimte_id == Ruimte.ruimte_id,
+    ).join(
+        Vestiging,
+        Ruimte.vestiging_id == Vestiging.vestiging_id,
+    ).filter(
+        Kast.bedrijf_id == bedrijf_id,
+    ).order_by(
+        Vestiging.naam,
+        Ruimte.nummer,
+        Ruimte.naam,
+        Kast.naam,
+    ).all()
+    return render_template('kast_selectie.html', kasten=kasten)
+
+
+@app.route('/assistent/kast/<int:kast_id>')
+def assistent_kast_inhoud(kast_id):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    kast = get_scoped_item(Kast, kast_id, bedrijf_id)
+    if not kast:
+        flash('Kast niet gevonden of geen toegang.', 'warning')
+        return redirect(url_for('kast_selectie'))
+
+    inhoud = db.session.query(
+        Voorraad_Positie,
+        Lokaal_Artikel,
+        Global_Catalogus,
+    ).join(
+        Lokaal_Artikel,
+        Voorraad_Positie.lokaal_artikel_id
+        == Lokaal_Artikel.lokaal_artikel_id,
+    ).outerjoin(
+        Global_Catalogus,
+        Lokaal_Artikel.global_id == Global_Catalogus.global_id,
+    ).filter(
+        Voorraad_Positie.kast_id == kast_id,
+        Voorraad_Positie.bedrijf_id == bedrijf_id,
+    ).order_by(
+        Lokaal_Artikel.eigen_naam,
+    ).all()
+    artikelen = db.session.query(Lokaal_Artikel).filter_by(
+        bedrijf_id=bedrijf_id,
+    ).order_by(
+        Lokaal_Artikel.eigen_naam,
+    ).all()
+    return render_template(
+        'kast_inhoud.html',
+        kast=kast,
+        inhoud=inhoud,
+        artikelen=artikelen,
+    )
+
+
 @app.route('/assistent/kamer/<int:ruimte_id>')
 def assistent_kamer_view(ruimte_id):
     if not check_db(): return redirect(url_for('dashboard'))
@@ -1945,6 +2008,14 @@ def api_artikel_gebruik(artikel_id):
     standard = _article_kanban_standard(artikel)
     for position, storage_location, room in posities:
         display = kanban_display_values(position, artikel)
+        min_inherits_standard = (
+            display['materiaaltype'] == Materiaaltype.KANBAN.value
+            and not display['min_is_override']
+        )
+        refill_inherits_standard = (
+            display['materiaaltype'] == Materiaaltype.KANBAN.value
+            and not display['refill_is_override']
+        )
         usage.append({
             'ruimte': room.naam,
             'opslaglocatie': storage_location.naam,
@@ -1955,11 +2026,9 @@ def api_artikel_gebruik(artikel_id):
             'aanv_afwijkend': display['refill_is_override'],
             'standaard_min': standard.min_level,
             'standaard_aanv': standard.refill_quantity,
-            'erft_standaard': (
-                display['materiaaltype'] == Materiaaltype.KANBAN.value
-                and not display['min_is_override']
-                and not display['refill_is_override']
-            ),
+            'min_erft_standaard': min_inherits_standard,
+            'aanv_erft_standaard': refill_inherits_standard,
+            'erft_standaard': min_inherits_standard and refill_inherits_standard,
         })
     return jsonify(usage)
 
