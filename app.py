@@ -20,6 +20,14 @@ from sqlalchemy import func, or_, text, inspect
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from azure.storage.blob import BlobServiceClient
+from kanban_domain import (
+    KanbanSettingsError,
+    KanbanStandard,
+    Materiaaltype,
+    effective_kanban_settings,
+    normalized_position_overrides,
+    normalize_material_type,
+)
 
 # Laad variabelen
 load_dotenv()
@@ -41,6 +49,7 @@ db_server = os.environ.get('DB_SERVER')
 db_name = os.environ.get('DB_NAME')
 db_user = os.environ.get('DB_USER')
 db_pass = os.environ.get('DB_PASS')
+database_url = os.environ.get('DATABASE_URL')
 connect_str = os.environ.get('AZURE_STORAGE_CONNECTION_STRING')
 container_name = os.environ.get('AZURE_CONTAINER_NAME')
 
@@ -69,7 +78,10 @@ encoded_user = urllib.parse.quote_plus(db_user) if db_user else ''
 encoded_pass = urllib.parse.quote_plus(db_pass) if db_pass else ''
 
 driver = 'ODBC+Driver+18+for+SQL+Server'
-app.config['SQLALCHEMY_DATABASE_URI'] = f"mssql+pyodbc://{encoded_user}:{encoded_pass}@{db_server}/{db_name}?driver={driver}&TrustServerCertificate=yes"
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url or (
+    f"mssql+pyodbc://{encoded_user}:{encoded_pass}@{db_server}/{db_name}"
+    f"?driver={driver}&TrustServerCertificate=yes"
+)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -114,6 +126,42 @@ def ensure_scan_schema():
         if 'kaart_id' not in existing_columns:
             db.session.execute(text("ALTER TABLE Print_Queue ADD kaart_id NVARCHAR(36) NULL"))
             db.session.commit()
+
+    ensure_kanban_settings_schema()
+
+
+def ensure_kanban_settings_schema():
+    """Add expand-step columns without rewriting or deleting legacy values."""
+    inspector = inspect(db.engine)
+    column_definitions = {
+        'Lokaal_Artikel': {
+            'kanban_min': 'INTEGER NULL',
+            'kanban_refill_quantity': 'INTEGER NULL',
+        },
+        'Voorraad_Positie': {
+            'materiaaltype': 'NVARCHAR(20) NULL',
+            'kanban_min_override': 'INTEGER NULL',
+            'kanban_refill_quantity_override': 'INTEGER NULL',
+        },
+    }
+
+    changed = False
+    for table_name, columns in column_definitions.items():
+        if not inspector.has_table(table_name):
+            continue
+        existing_columns = {
+            column['name'] for column in inspector.get_columns(table_name)
+        }
+        for column_name, column_definition in columns.items():
+            if column_name in existing_columns:
+                continue
+            db.session.execute(text(
+                f"ALTER TABLE [{table_name}] ADD [{column_name}] {column_definition}"
+            ))
+            changed = True
+
+    if changed:
+        db.session.commit()
 
 # --- AUTOMAP & MODELS ---
 Base = automap_base()
@@ -321,6 +369,161 @@ def _get_reset_actor():
     )
 
 
+def _article_kanban_standard(article):
+    """Read the article standard, defaulting old rows to the new 1/1 default."""
+    if article is None:
+        return KanbanStandard.from_values()
+    return KanbanStandard.from_values(
+        getattr(article, 'kanban_min', None),
+        getattr(article, 'kanban_refill_quantity', None),
+    )
+
+
+def _position_material_type(position):
+    return normalize_material_type(getattr(position, 'materiaaltype', None))
+
+
+def _legacy_position_overrides(position):
+    """Read valid old position values as temporary local effective values."""
+    old_min = getattr(position, 'trigger_min', None)
+    old_target = getattr(position, 'target_max', None)
+    if old_min is None or old_target is None:
+        return None, None
+
+    try:
+        old_min = int(old_min)
+        old_refill = int(old_target) - old_min
+    except (TypeError, ValueError):
+        return None, None
+    if old_min < 0 or old_refill < 1:
+        return None, None
+    return old_min, old_refill
+
+
+def _position_overrides(position, article):
+    standard = _article_kanban_standard(article)
+    raw_material_type = getattr(position, 'materiaaltype', None)
+    min_override = getattr(position, 'kanban_min_override', None)
+    refill_override = getattr(position, 'kanban_refill_quantity_override', None)
+
+    # Existing rows have no new columns yet.  Treat their valid legacy values
+    # as local effective values so the expand step does not change behaviour.
+    if (
+        raw_material_type is None
+        and min_override is None
+        and refill_override is None
+    ):
+        min_override, refill_override = _legacy_position_overrides(position)
+
+    return normalized_position_overrides(
+        _position_material_type(position),
+        standard,
+        min_override,
+        refill_override,
+    )
+
+
+def effective_position_kanban_settings(position, article):
+    """Return effective Kanban settings, or ``None`` for Standard material."""
+    standard = _article_kanban_standard(article)
+    min_override, refill_override = _position_overrides(position, article)
+    return effective_kanban_settings(
+        _position_material_type(position),
+        standard,
+        min_override,
+        refill_override,
+    )
+
+
+def position_kanban_override_values(position, article):
+    """Return only actual local deviations from the Article standard."""
+    if _position_material_type(position) is Materiaaltype.STANDAARD:
+        return None, None
+    return _position_overrides(position, article)
+
+
+def _set_article_kanban_standard(article, standard):
+    setattr(article, 'kanban_min', standard.min_level)
+    setattr(article, 'kanban_refill_quantity', standard.refill_quantity)
+
+
+def _set_new_article_defaults(article):
+    _set_article_kanban_standard(article, KanbanStandard.from_values())
+
+
+def _position_form_values(form, standard):
+    min_override = form.get('kanban_min_override')
+    refill_override = form.get('kanban_refill_quantity_override')
+
+    # Accept the old form names while old pages or bookmarks are still in use.
+    if min_override is None and refill_override is None:
+        old_min = form.get('trigger_min')
+        old_target = form.get('target_max')
+        if old_min not in (None, '') and old_target not in (None, ''):
+            try:
+                min_override = int(old_min)
+                refill_override = int(old_target) - min_override
+            except (TypeError, ValueError):
+                min_override = old_min
+                refill_override = old_target
+
+    return normalized_position_overrides(
+        Materiaaltype.KANBAN,
+        standard,
+        min_override,
+        refill_override,
+    )
+
+
+def _set_position_kanban_values(position, article, form):
+    material_type = normalize_material_type(form.get('materiaaltype'))
+    standard = _article_kanban_standard(article)
+
+    if material_type is Materiaaltype.STANDAARD:
+        min_override, refill_override = None, None
+        effective = None
+    else:
+        min_override, refill_override = _position_form_values(form, standard)
+        effective = effective_kanban_settings(
+            material_type,
+            standard,
+            min_override,
+            refill_override,
+        )
+
+    setattr(position, 'materiaaltype', material_type.value)
+    setattr(
+        position,
+        'strategie',
+        'STANDARD' if material_type is Materiaaltype.STANDAARD else 'TWO_BIN',
+    )
+    setattr(position, 'kanban_min_override', min_override)
+    setattr(position, 'kanban_refill_quantity_override', refill_override)
+
+    # Keep the old columns synchronized only as temporary migration
+    # compatibility.  The new behavior is always read from the fields above.
+    if effective is None:
+        setattr(position, 'trigger_min', None)
+        setattr(position, 'target_max', None)
+    else:
+        setattr(position, 'trigger_min', effective.min_level)
+        setattr(
+            position,
+            'target_max',
+            effective.min_level + effective.refill_quantity,
+        )
+
+
+app.jinja_env.globals['effective_position_kanban_settings'] = (
+    effective_position_kanban_settings
+)
+app.jinja_env.globals['article_kanban_standard'] = _article_kanban_standard
+app.jinja_env.globals['position_material_type'] = _position_material_type
+app.jinja_env.globals['position_kanban_override_values'] = (
+    position_kanban_override_values
+)
+
+
 def _create_kanban_card(pos, art, kast, ruimte, bedrijf):
     human_code = _generate_human_code()
     while db.session.query(KanbanKaart).filter(KanbanKaart.human_code == human_code).first():
@@ -345,6 +548,11 @@ def _create_kanban_card(pos, art, kast, ruimte, bedrijf):
 def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
     header_text = ruimte.naam.upper()
     if ruimte.nummer: header_text = f"{ruimte.nummer} {header_text}"
+    effective = effective_position_kanban_settings(pos, art)
+    if effective is None:
+        raise KanbanSettingsError(
+            'Standaard materiaal kan geen Kanban-kaart aanvragen.'
+        )
     card = _create_kanban_card(pos, art, kast, ruimte, bedrijf)
 
     queue_kwargs = dict(
@@ -359,8 +567,8 @@ def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
         product_sku=str(art.lokaal_artikel_id),
         product_image_url=pos.locatie_foto_url or art.foto_url or (global_item.foto_url if global_item else None),
         location_text=f"{kast.naam} ({kast.type_opslag})",
-        min_level=pos.trigger_min,
-        max_level=pos.target_max,
+        min_level=effective.min_level,
+        max_level=effective.min_level + effective.refill_quantity,
         qr_code_value=_generate_public_scan_url(card.public_token),
         qr_human_readable=card.human_code,
         company_logo_url=bedrijf.logo_url
@@ -840,14 +1048,19 @@ def update_voorraad_positie(voorraad_positie_id):
         flash('Voorraadpositie niet gevonden of geen toegang.', 'warning')
         return redirect(url_for('assistent_kamers'))
 
-    if positie:
-        positie.trigger_min = request.form.get('trigger_min')
-        positie.target_max = request.form.get('target_max')
-        db.session.commit()
-        flash('Voorraadniveaus bijgewerkt.', 'success')
     kast = get_scoped_item(Kast, positie.kast_id, bedrijf_id)
     if not kast:
         return redirect(url_for('assistent_kamers'))
+
+    try:
+        artikel = get_scoped_item(Lokaal_Artikel, positie.lokaal_artikel_id, bedrijf_id)
+        _set_position_kanban_values(positie, artikel, request.form)
+    except KanbanSettingsError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
+
+    db.session.commit()
+    flash('Voorraadinstellingen bijgewerkt.', 'success')
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
 @app.route('/assistent/kast/<int:kast_id>/toevoegen', methods=['POST'])
@@ -867,9 +1080,15 @@ def add_to_kast_from_room(kast_id):
         lokaal_artikel_id=artikel_id
     ).first()
     if not bestaat:
+        standard = _article_kanban_standard(artikel)
         nieuw = Voorraad_Positie(
             bedrijf_id=bedrijf_id, kast_id=kast_id, lokaal_artikel_id=artikel_id,
-            strategie='TWO_BIN', trigger_min=1, target_max=2
+            strategie='TWO_BIN',
+            materiaaltype=Materiaaltype.KANBAN.value,
+            kanban_min_override=None,
+            kanban_refill_quantity_override=None,
+            trigger_min=standard.min_level,
+            target_max=standard.min_level + standard.refill_quantity,
         )
         db.session.add(nieuw)
         db.session.flush()
@@ -900,7 +1119,14 @@ def kanban_aanvragen_enkel(voorraad_positie_id):
 
         if not result:
             flash("Artikel niet gevonden.", "danger")
-            return redirect(request.referrer)
+            return redirect(request.referrer or url_for('assistent_kamers'))
+
+        if _position_material_type(result[0]) is Materiaaltype.STANDAARD:
+            flash(
+                "Standaard materiaal heeft geen Kanban-kaart.",
+                "info",
+            )
+            return redirect(request.referrer or url_for('assistent_kamers'))
 
         queue_item = create_queue_item(*result)
         db.session.add(queue_item)
@@ -929,12 +1155,16 @@ def kanban_aanvragen_kast(kast_id):
             .join(Bedrijf, Voorraad_Positie.bedrijf_id == Bedrijf.bedrijf_id)\
             .filter(Voorraad_Positie.kast_id == kast_id, Voorraad_Positie.bedrijf_id == bedrijf_id).all()
 
-        if not results:
-            flash("Deze kast is leeg.", "warning")
-            return redirect(request.referrer)
+        kanban_results = [
+            row for row in results
+            if _position_material_type(row[0]) is Materiaaltype.KANBAN
+        ]
+        if not kanban_results:
+            flash("Deze opslaglocatie bevat geen Kanban-materiaal.", "info")
+            return redirect(request.referrer or url_for('assistent_kamers'))
 
         count = 0
-        for row in results:
+        for row in kanban_results:
             queue_item = create_queue_item(*row)
             db.session.add(queue_item)
             count += 1
@@ -1344,6 +1574,7 @@ def artikelen_beheer():
         actie = request.form.get('actie')
         if actie == 'nieuw_lokaal':
             nieuw = Lokaal_Artikel(bedrijf_id=bedrijf_id, eigen_naam=request.form.get('naam'), verpakkingseenheid_tekst=request.form.get('eenheid'))
+            _set_new_article_defaults(nieuw)
             file = request.files.get('afbeelding')
             if file:
                 url = upload_image_to_azure(file)
@@ -1357,6 +1588,7 @@ def artikelen_beheer():
             bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
             if global_item and not bestaat:
                 nieuw = Lokaal_Artikel(bedrijf_id=bedrijf_id, global_id=global_id, eigen_naam=global_item.generieke_naam, verpakkingseenheid_tekst='Stuk')
+                _set_new_article_defaults(nieuw)
                 db.session.add(nieuw)
                 db.session.commit()
                 flash('Gekoppeld.', 'success')
@@ -1364,8 +1596,18 @@ def artikelen_beheer():
             artikel_id = request.form.get('artikel_id', type=int)
             artikel = get_scoped_item(Lokaal_Artikel, artikel_id, bedrijf_id)
             if artikel:
+                try:
+                    standard = KanbanStandard.from_values(
+                        request.form.get('kanban_min'),
+                        request.form.get('kanban_refill_quantity'),
+                    )
+                except KanbanSettingsError as exc:
+                    flash(str(exc), 'danger')
+                    return redirect(url_for('artikelen_beheer'))
+
                 artikel.eigen_naam = request.form.get('naam')
                 artikel.verpakkingseenheid_tekst = request.form.get('eenheid')
+                _set_article_kanban_standard(artikel, standard)
                 file = request.files.get('afbeelding')
                 if file:
                     url = upload_image_to_azure(file)
@@ -1375,7 +1617,15 @@ def artikelen_beheer():
         return redirect(url_for('artikelen_beheer'))
 
     raw_results = db.session.query(Lokaal_Artikel, Global_Catalogus).outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id).filter(Lokaal_Artikel.bedrijf_id == bedrijf_id).order_by(Lokaal_Artikel.eigen_naam).all()
-    view_data = [{'obj': l, 'display_naam': l.eigen_naam, 'display_foto': l.foto_url or (g.foto_url if g else None), 'is_globaal': g is not None, 'is_afwijkend': g and l.eigen_naam != g.generieke_naam, 'oorsprong_naam': g.generieke_naam if g else None} for l, g in raw_results]
+    view_data = [{
+        'obj': l,
+        'display_naam': l.eigen_naam,
+        'display_foto': l.foto_url or (g.foto_url if g else None),
+        'is_globaal': g is not None,
+        'is_afwijkend': g and l.eigen_naam != g.generieke_naam,
+        'oorsprong_naam': g.generieke_naam if g else None,
+        'kanban_standard': _article_kanban_standard(l),
+    } for l, g in raw_results]
     linked_ids = db.session.query(Lokaal_Artikel.global_id).filter(Lokaal_Artikel.bedrijf_id == bedrijf_id, Lokaal_Artikel.global_id.isnot(None))
     beschikbare_globals = db.session.query(Global_Catalogus).filter(Global_Catalogus.global_id.notin_(linked_ids)).all()
     return render_template('artikelen_beheer.html', artikelen=view_data, beschikbare_globals=beschikbare_globals)
@@ -1401,6 +1651,7 @@ def vervang_artikel():
             flash('Doelartikel uit catalogus niet gevonden.', 'warning')
             return redirect(url_for('artikelen_beheer'))
         nieuw = Lokaal_Artikel(bedrijf_id=bedrijf_id, global_id=nieuw_global_id, eigen_naam=g_item.generieke_naam, verpakkingseenheid_tekst=oud_artikel.verpakkingseenheid_tekst)
+        _set_new_article_defaults(nieuw)
         db.session.add(nieuw)
         db.session.flush()
         doel_id = nieuw.lokaal_artikel_id
@@ -1454,6 +1705,7 @@ def beheer_catalogus():
             bestaat = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id, global_id=global_id).first()
             if global_item and not bestaat:
                 nieuw = Lokaal_Artikel(bedrijf_id=bedrijf_id, global_id=global_id, eigen_naam=global_item.generieke_naam, verpakkingseenheid_tekst="Stuk")
+                _set_new_article_defaults(nieuw)
                 db.session.add(nieuw)
                 db.session.commit()
                 flash('Opgenomen in lokaal assortiment.', 'success')
@@ -1543,7 +1795,39 @@ def beheer_infra():
                         db.session.flush()
                         posities = db.session.query(Voorraad_Positie).filter_by(kast_id=bron_kast.kast_id, bedrijf_id=bedrijf_id).all()
                         for pos in posities:
-                            nieuw_pos = Voorraad_Positie(bedrijf_id=bedrijf_id, kast_id=nieuwe_kast.kast_id, lokaal_artikel_id=pos.lokaal_artikel_id, strategie=pos.strategie, trigger_min=pos.trigger_min, target_max=pos.target_max, locatie_foto_url=pos.locatie_foto_url)
+                            artikel = get_scoped_item(
+                                Lokaal_Artikel,
+                                pos.lokaal_artikel_id,
+                                bedrijf_id,
+                            )
+                            effective = effective_position_kanban_settings(
+                                pos,
+                                artikel,
+                            )
+                            override_min, override_refill = (
+                                position_kanban_override_values(pos, artikel)
+                            )
+                            nieuw_pos = Voorraad_Positie(
+                                bedrijf_id=bedrijf_id,
+                                kast_id=nieuwe_kast.kast_id,
+                                lokaal_artikel_id=pos.lokaal_artikel_id,
+                                strategie=(
+                                    'TWO_BIN'
+                                    if _position_material_type(pos)
+                                    is Materiaaltype.KANBAN
+                                    else 'STANDARD'
+                                ),
+                                materiaaltype=_position_material_type(pos).value,
+                                kanban_min_override=override_min,
+                                kanban_refill_quantity_override=override_refill,
+                                trigger_min=effective.min_level if effective else None,
+                                target_max=(
+                                    effective.min_level + effective.refill_quantity
+                                    if effective
+                                    else None
+                                ),
+                                locatie_foto_url=pos.locatie_foto_url,
+                            )
                             db.session.add(nieuw_pos)
                             db.session.flush()
                             nieuw_pos.qr_code = f"{API_BASE_URL}/{nieuw_pos.voorraad_positie_id}"

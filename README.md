@@ -21,3 +21,16 @@ Beheerapp voor de kanbanvoorraad, met een afzonderlijke scanfunctie voor openbar
 - Blob Storage-container voor artikelafbeeldingen: `artikelafbeeldingen`
 
 De configuratie en secrets staan als Application Settings in Azure en horen niet in de repository thuis.
+
+## Tests lokaal uitvoeren
+
+Gebruik Python 3.11 voor de huidige runtime-dependencies en voer daarna uit:
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
+De Flask-tests gebruiken SQLite in geheugen en hebben geen Azure-database,
+blobopslag, echte printer of live printservice nodig.

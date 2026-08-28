@@ -85,6 +85,7 @@
                                 <div class="fw-bold">{{ item.display_naam }}</div>
                                 <div class="small text-muted">
                                     {{ item.obj.verpakkingseenheid_tekst or 'Stuk' }}
+                                    <br>Artikel-Kanbanstandaard: Min {{ item.kanban_standard.min_level }} / Aanv. {{ item.kanban_standard.refill_quantity }}
                                     {% if item.is_afwijkend %}
                                         <br><span class="text-warning fst-italic"><i class="bi bi-pencil-square"></i> Afwijkend van catalogus ({{ item.oorsprong_naam }})</span>
                                     {% endif %}
@@ -114,6 +115,8 @@
                                             data-id="{{ item.obj.lokaal_artikel_id }}"
                                             data-naam="{{ item.obj.eigen_naam or '' }}"
                                             data-eenheid="{{ item.obj.verpakkingseenheid_tekst or '' }}"
+                                            data-kanban-min="{{ item.kanban_standard.min_level }}"
+                                            data-kanban-refill="{{ item.kanban_standard.refill_quantity }}"
                                             data-bron="{{ 'Catalogus' if item.is_globaal else 'Lokaal' }}">
                                         <i class="bi bi-pencil"></i>
                                     </button>
@@ -216,6 +219,20 @@
                         <label class="form-label">Eenheid</label>
                         <input type="text" name="eenheid" id="bewerkEenheid" class="form-control">
                     </div>
+                    <fieldset class="border rounded p-3 mb-3">
+                        <legend class="float-none w-auto px-2 fs-6">Artikel-Kanbanstandaard</legend>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label">Min</label>
+                                <input type="number" min="0" name="kanban_min" id="bewerkKanbanMin" class="form-control" required>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">Aanv.</label>
+                                <input type="number" min="1" name="kanban_refill_quantity" id="bewerkKanbanRefill" class="form-control" required>
+                            </div>
+                        </div>
+                        <div class="form-text">Deze standaard geldt voor Kanban-posities zonder lokale afwijking.</div>
+                    </fieldset>
                     <div class="mb-3">
                         <label class="form-label">Eigen Foto Uploaden</label>
                         <input type="file" name="afbeelding" class="form-control" accept=".png">
@@ -290,6 +307,8 @@
         document.getElementById('bewerkId').value = button.getAttribute('data-id')
         document.getElementById('bewerkNaam').value = button.getAttribute('data-naam')
         document.getElementById('bewerkEenheid').value = button.getAttribute('data-eenheid')
+        document.getElementById('bewerkKanbanMin').value = button.getAttribute('data-kanban-min')
+        document.getElementById('bewerkKanbanRefill').value = button.getAttribute('data-kanban-refill')
         document.getElementById('bronInfo').textContent = "Bron: " + button.getAttribute('data-bron')
     })
 

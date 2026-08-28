@@ -15,6 +15,12 @@
 
 <div class="accordion" id="kastenAccordion">
     {% for kast, inhoud in kasten_data.items() %}
+    {% set kanban_count = namespace(value=0) %}
+    {% for row in inhoud %}
+        {% if position_material_type(row[0]).value == 'KANBAN' %}
+            {% set kanban_count.value = kanban_count.value + 1 %}
+        {% endif %}
+    {% endfor %}
     <div class="accordion-item mb-3 shadow-sm border">
         <h2 class="accordion-header" id="heading{{ kast.kast_id }}">
             <div class="d-flex justify-content-between align-items-center bg-white px-3 py-2 border-bottom">
@@ -26,7 +32,7 @@
                 <!-- BATCH PRINT KNOP -->
                 <form action="{{ url_for('kanban_aanvragen_kast', kast_id=kast.kast_id) }}" method="POST" class="ms-3" onsubmit="return confirm('Wil je kaartjes aanvragen voor ALLE artikelen in deze kast?');">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-sm btn-outline-dark" title="Print alle kaartjes voor deze kast">
+                    <button type="submit" class="btn btn-sm btn-outline-dark" title="{% if kanban_count.value == 0 %}Deze Opslaglocatie bevat geen Kanban-materiaal{% else %}Print alle Kanban-kaartjes voor deze Opslaglocatie{% endif %}" {% if kanban_count.value == 0 %}disabled{% endif %}>
                         <i class="bi bi-printer-fill"></i> <span class="d-none d-md-inline">Alles Printen</span>
                     </button>
                 </form>
@@ -41,13 +47,16 @@
                             <tr>
                                 <th style="width:50px;">Foto</th>
                                 <th>Artikel</th>
+                                <th style="width:130px;">Materiaaltype</th>
                                 <th style="width:100px;">Min</th>
-                                <th style="width:100px;">Max</th>
+                                <th style="width:100px;">Aanv.</th>
                                 <th style="width:80px;" class="text-center">Acties</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for pos, lokaal, globaal in inhoud %}
+                            {% set effectieve_kanban = effective_position_kanban_settings(pos, lokaal) %}
+                            {% set afwijkende_min, afwijkende_aanv = position_kanban_override_values(pos, lokaal) %}
                             <tr>
                                 <td>
                                     {% set img = pos.locatie_foto_url or lokaal.foto_url or (globaal and globaal.foto_url) %}
@@ -71,15 +80,35 @@
                                 <form action="{{ url_for('update_voorraad_positie', voorraad_positie_id=pos.voorraad_positie_id) }}" method="POST">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                     <td>
-                                        <input type="number" name="trigger_min" value="{{ pos.trigger_min }}" class="form-control form-control-sm" onchange="this.form.submit()">
+                                        <select name="materiaaltype" class="form-select form-select-sm" onchange="this.form.submit()">
+                                            <option value="KANBAN" {% if position_material_type(pos).value == 'KANBAN' %}selected{% endif %}>Kanban</option>
+                                            <option value="STANDAARD" {% if position_material_type(pos).value == 'STANDAARD' %}selected{% endif %}>Standaard</option>
+                                        </select>
                                     </td>
                                     <td>
-                                        <input type="number" name="target_max" value="{{ pos.target_max }}" class="form-control form-control-sm" onchange="this.form.submit()">
+                                        {% if effectieve_kanban %}
+                                        <div class="input-group input-group-sm">
+                                            <input type="number" min="0" name="kanban_min_override" value="{{ effectieve_kanban.min_level if effectieve_kanban else '' }}" class="form-control form-control-sm {% if afwijkende_min is not none %}border-warning bg-warning-subtle{% endif %}" title="{% if afwijkende_min is not none %}Artikel-default: {{ article_kanban_standard(lokaal).min_level }}{% endif %}" {% if not effectieve_kanban %}disabled{% endif %} onchange="this.form.submit()">
+                                            {% if afwijkende_min is not none %}<span class="input-group-text text-warning" title="Lokale afwijking van de Artikel-Kanbanstandaard"><i class="bi bi-gear-fill"></i></span>{% endif %}
+                                        </div>
+                                        {% else %}
+                                        <span class="text-muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if effectieve_kanban %}
+                                        <div class="input-group input-group-sm">
+                                            <input type="number" min="1" name="kanban_refill_quantity_override" value="{{ effectieve_kanban.refill_quantity if effectieve_kanban else '' }}" class="form-control form-control-sm {% if afwijkende_aanv is not none %}border-warning bg-warning-subtle{% endif %}" title="{% if afwijkende_aanv is not none %}Artikel-default: {{ article_kanban_standard(lokaal).refill_quantity }}{% endif %}" {% if not effectieve_kanban %}disabled{% endif %} onchange="this.form.submit()">
+                                            {% if afwijkende_aanv is not none %}<span class="input-group-text text-warning" title="Lokale afwijking van de Artikel-Kanbanstandaard"><i class="bi bi-gear-fill"></i></span>{% endif %}
+                                        </div>
+                                        {% else %}
+                                        <span class="text-muted">—</span>
+                                        {% endif %}
                                     </td>
                                     <td class="text-center">
                                         <div class="btn-group">
                                             <!-- ENKEL PRINT KNOP -->
-                                            <button type="submit" formaction="{{ url_for('kanban_aanvragen_enkel', voorraad_positie_id=pos.voorraad_positie_id) }}" class="btn btn-sm btn-outline-secondary" title="Kaartje aanvragen">
+                                            <button type="submit" formaction="{{ url_for('kanban_aanvragen_enkel', voorraad_positie_id=pos.voorraad_positie_id) }}" class="btn btn-sm btn-outline-secondary" title="{% if effectieve_kanban %}Kanban-kaartje aanvragen{% else %}Standaard materiaal heeft geen Kanban-kaart{% endif %}" {% if not effectieve_kanban %}disabled{% endif %}>
                                                 <i class="bi bi-printer"></i>
                                             </button>
                                             
@@ -92,7 +121,7 @@
                                 </form>
                             </tr>
                             {% else %}
-                            <tr><td colspan="5" class="text-center text-muted py-3">Deze kast is nog leeg.</td></tr>
+                            <tr><td colspan="6" class="text-center text-muted py-3">Deze kast is nog leeg.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>
