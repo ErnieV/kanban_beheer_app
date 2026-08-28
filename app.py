@@ -1561,6 +1561,40 @@ def _kast_inventory_query(kast_id, bedrijf_id):
     )
 
 
+def _ruimte_inventory_query(ruimte_id, bedrijf_id):
+    return db.session.query(
+        Voorraad_Positie,
+        Lokaal_Artikel,
+        Global_Catalogus,
+        Kast,
+        Ruimte,
+        Ruimte_Type,
+        Bedrijf,
+    ).join(
+        Lokaal_Artikel,
+        Voorraad_Positie.lokaal_artikel_id
+        == Lokaal_Artikel.lokaal_artikel_id,
+    ).outerjoin(
+        Global_Catalogus,
+        Lokaal_Artikel.global_id == Global_Catalogus.global_id,
+    ).join(
+        Kast,
+        Voorraad_Positie.kast_id == Kast.kast_id,
+    ).join(
+        Ruimte,
+        Kast.ruimte_id == Ruimte.ruimte_id,
+    ).outerjoin(
+        Ruimte_Type,
+        Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id,
+    ).join(
+        Bedrijf,
+        Voorraad_Positie.bedrijf_id == Bedrijf.bedrijf_id,
+    ).filter(
+        Kast.ruimte_id == ruimte_id,
+        Voorraad_Positie.bedrijf_id == bedrijf_id,
+    )
+
+
 def _storage_location_print_item(row, kaart_type):
     position, article, global_item, kast, room, room_type, company = row
     material_type = _position_material_type(position)
@@ -1592,6 +1626,7 @@ def _storage_location_print_item(row, kaart_type):
     return {
         'position_id': position.voorraad_positie_id,
         'display_name': article_name or 'Naamloos Artikel',
+        'storage_location_name': getattr(kast, 'naam', '') or 'Onbekende Opslaglocatie',
         'product_photo_url': product_photo_url,
         'material_type': material_type.value,
         'min_level': effective.min_level if effective else None,
@@ -1615,6 +1650,28 @@ def _kast_print_selection_items(rows, kaart_type):
             item['position_id'],
         ),
     )
+
+
+def _ruimte_print_selection_items(rows, kaart_type):
+    items = [
+        _storage_location_print_item(row, kaart_type)
+        for row in rows
+    ]
+    items = [item for item in items if item['applicable']]
+    return sorted(
+        items,
+        key=lambda item: (
+            item['storage_location_name'].casefold(),
+            item['display_name'].casefold(),
+            item['position_id'],
+        ),
+    )
+
+
+def _print_selection_label(kaart_type, singular=False):
+    if kaart_type == 'kanban':
+        return 'Kanban-kaartje' if singular else 'Kanban-kaartjes'
+    return 'Locatiekaartje' if singular else 'Locatiekaartjes'
 
 
 @app.route('/assistent/kast/<int:kast_id>')
@@ -1680,7 +1737,21 @@ def assistent_kamer_view(ruimte_id):
             .all()
         kasten_data[kast] = inhoud
     alle_artikelen = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id).order_by(Lokaal_Artikel.eigen_naam).all()
-    return render_template('assistent_kamer_view.html', ruimte=ruimte, kasten_data=kasten_data, alle_artikelen=alle_artikelen)
+    return render_template(
+        'assistent_kamer_view.html',
+        ruimte=ruimte,
+        kasten_data=kasten_data,
+        alle_artikelen=alle_artikelen,
+        kanban_count=sum(
+            _position_material_type(row[0]) is Materiaaltype.KANBAN
+            for inhoud in kasten_data.values()
+            for row in inhoud
+        ),
+        locatiekaart_count=sum(
+            len(inhoud)
+            for inhoud in kasten_data.values()
+        ),
+    )
 
 @app.route('/assistent/update-voorraad/<int:voorraad_positie_id>', methods=['POST'])
 def update_voorraad_positie(voorraad_positie_id):
@@ -1833,6 +1904,89 @@ def kast_print_selectie(kast_id, kaart_type):
         kast=kast,
         kaart_type=kaart_type,
         kaart_type_label=kaart_type_label,
+        selection_items=selection_items,
+        applicable_count=len(applicable_items),
+        valid_count=len(valid_items),
+        selected_ids=selected_ids,
+    )
+
+
+@app.route('/assistent/kamer/<int:ruimte_id>/print/<kaart_type>', methods=['GET', 'POST'])
+def ruimte_print_selectie(ruimte_id, kaart_type):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    if kaart_type not in {'kanban', 'locatie'}:
+        flash('Onbekend kaarttype.', 'warning')
+        return redirect(url_for('assistent_kamers'))
+
+    bedrijf_id = get_huidig_bedrijf_id()
+    ruimte = get_scoped_item(Ruimte, ruimte_id, bedrijf_id)
+    if not ruimte:
+        flash('Ruimte niet gevonden of geen toegang.', 'warning')
+        return redirect(url_for('assistent_kamers'))
+
+    rows = _ruimte_inventory_query(ruimte_id, bedrijf_id).all()
+    selection_items = _ruimte_print_selection_items(rows, kaart_type)
+    rows_by_position_id = {
+        row[0].voorraad_positie_id: row
+        for row in rows
+    }
+    applicable_items = [item for item in selection_items if item['applicable']]
+    valid_items = [item for item in applicable_items if item['valid']]
+    selected_ids = None
+
+    if request.method == 'POST':
+        selected_ids = {
+            int(value)
+            for value in request.form.getlist('position_ids')
+            if value.isdigit()
+        }
+        selected_items = [
+            item for item in valid_items
+            if item['position_id'] in selected_ids
+        ]
+        if not selected_items:
+            flash('Selecteer minimaal één geldig Artikel om te printen.', 'warning')
+            return render_template(
+                'kamer_print_selectie.html',
+                ruimte=ruimte,
+                kaart_type=kaart_type,
+                kaart_type_label=_print_selection_label(kaart_type),
+                selection_items=selection_items,
+                applicable_count=len(applicable_items),
+                valid_count=len(valid_items),
+                selected_ids=set(),
+            )
+
+        try:
+            for item in selected_items:
+                row = rows_by_position_id[item['position_id']]
+                if kaart_type == 'kanban':
+                    db.session.add(create_queue_item(*row))
+                else:
+                    create_or_reuse_locatiekaart_version(*row)
+            db.session.commit()
+            kaartje_label = _print_selection_label(kaart_type, singular=True)
+            kaartje_meervoud = 's' if len(selected_items) != 1 else ''
+            flash(
+                f'{len(selected_items)} {kaartje_label}{kaartje_meervoud} aangevraagd.',
+                'success',
+            )
+            return redirect(url_for('assistent_kamer_view', ruimte_id=ruimte_id))
+        except Exception as exc:
+            db.session.rollback()
+            flash(f'Fout bij printaanvraag: {exc}', 'danger')
+
+    if selected_ids is None:
+        selected_ids = {
+            item['position_id']
+            for item in valid_items
+        }
+    return render_template(
+        'kamer_print_selectie.html',
+        ruimte=ruimte,
+        kaart_type=kaart_type,
+        kaart_type_label=_print_selection_label(kaart_type),
         selection_items=selection_items,
         applicable_count=len(applicable_items),
         valid_count=len(valid_items),

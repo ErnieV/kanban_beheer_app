@@ -607,6 +607,328 @@ def test_empty_storage_location_print_selection_has_no_side_effect(
     assert commits == []
 
 
+def _room_print_rows():
+    room = SimpleNamespace(
+        ruimte_id=9,
+        ruimte_type_id=8,
+        naam="Behandelkamer",
+        nummer="1",
+    )
+    room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
+    company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    kast_a = SimpleNamespace(kast_id=4, naam="Kast A", ruimte_id=9)
+    kast_z = SimpleNamespace(kast_id=5, naam="Kast Z", ruimte_id=9)
+
+    def position(position_id, material_type):
+        return SimpleNamespace(
+            voorraad_positie_id=position_id,
+            materiaaltype=material_type,
+            kanban_min_override=None,
+            kanban_refill_quantity_override=None,
+            locatie_foto_url=None,
+        )
+
+    def article(article_id, name, photo="article.png"):
+        return SimpleNamespace(
+            lokaal_artikel_id=article_id,
+            eigen_naam=name,
+            foto_url=photo,
+            verpakkingseenheid_tekst="doos",
+            kanban_min=3,
+            kanban_refill_quantity=4,
+        )
+
+    return room, [
+        (
+            position(101, "KANBAN"),
+            article(1, "Zebra"),
+            None,
+            kast_z,
+            room,
+            room_type,
+            company,
+        ),
+        (
+            position(102, "KANBAN"),
+            article(2, "Alpha"),
+            None,
+            kast_a,
+            room,
+            room_type,
+            company,
+        ),
+        (
+            position(103, "STANDAARD"),
+            article(3, "Standard"),
+            None,
+            kast_a,
+            room,
+            room_type,
+            company,
+        ),
+        (
+            position(104, "KANBAN"),
+            article(4, "NoPhoto", photo=None),
+            None,
+            kast_a,
+            room,
+            room_type,
+            company,
+        ),
+    ]
+
+
+def test_room_print_selection_collects_and_orders_all_storage_locations(
+    app_module,
+    monkeypatch,
+):
+    room, rows = _room_print_rows()
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: room)
+    monkeypatch.setattr(app_module, "_ruimte_inventory_query", lambda *args: FakeQuery())
+
+    client = _csrf_client(app_module)
+    response = client.get("/assistent/kamer/9/print/kanban")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Kanban-kaartjes printen" in html
+    assert "3 toepasselijke" in html
+    assert "Alpha" in html
+    assert "NoPhoto" in html
+    assert "Zebra" in html
+    assert "Standard" not in html
+    assert re.search(r'value="102"\s+checked', html)
+    assert re.search(r'value="104"\s+disabled', html)
+    assert html.index("Kast A") < html.index("Kast Z")
+    assert html.index("Alpha") < html.index("NoPhoto") < html.index("Zebra")
+
+    response = client.get("/assistent/kamer/9/print/locatie")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Locatiekaartjes printen" in html
+    assert "4 toepasselijke" in html
+    assert "Standard" in html
+    assert "Aanv." not in html
+    assert re.search(r'value="103"\s+checked', html)
+    assert re.search(r'value="104"\s+disabled', html)
+
+
+def test_room_print_selection_processes_only_selected_valid_items(
+    app_module,
+    monkeypatch,
+):
+    room, rows = _room_print_rows()
+    created_rows = []
+    added = []
+    commits = []
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    class FakeSession:
+        def add(self, item):
+            added.append(item)
+
+        def commit(self):
+            commits.append(True)
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: room)
+    monkeypatch.setattr(app_module, "_ruimte_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(
+        app_module,
+        "create_queue_item",
+        lambda *row: created_rows.append(row) or "queue-item",
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kamer/9/print/kanban",
+        data={
+            "_csrf_token": "test-csrf",
+            "position_ids": ["101", "102", "104", "999"],
+        },
+    )
+
+    assert response.status_code == 302
+    assert [row[0].voorraad_positie_id for row in created_rows] == [102, 101]
+    assert added == ["queue-item", "queue-item"]
+    assert commits == [True]
+
+
+def test_room_location_print_selection_processes_selected_standard_and_kanban(
+    app_module,
+    monkeypatch,
+):
+    room, rows = _room_print_rows()
+    created_rows = []
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    class FakeSession:
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: room)
+    monkeypatch.setattr(app_module, "_ruimte_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(
+        app_module,
+        "create_or_reuse_locatiekaart_version",
+        lambda *row: created_rows.append(row) or ("version", True),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kamer/9/print/locatie",
+        data={
+            "_csrf_token": "test-csrf",
+            "position_ids": ["101", "103"],
+        },
+    )
+
+    assert response.status_code == 302
+    assert [row[0].voorraad_positie_id for row in created_rows] == [103, 101]
+
+
+def test_empty_room_print_selection_has_no_side_effect(
+    app_module,
+    monkeypatch,
+):
+    room = SimpleNamespace(ruimte_id=9, naam="Lege kamer", nummer=None)
+    commits = []
+
+    class FakeQuery:
+        def all(self):
+            return []
+
+    class FakeSession:
+        def commit(self):
+            commits.append(True)
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: room)
+    monkeypatch.setattr(app_module, "_ruimte_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kamer/9/print/kanban",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Selecteer minimaal één geldig Artikel" in html
+    assert 'id="printSelectionButton" disabled' in html
+    assert "assistent_kamer_view" in html or "/assistent/kamer/9" in html
+    assert commits == []
+
+
+def test_room_page_exposes_independent_print_actions_with_counts(
+    app_module,
+    monkeypatch,
+):
+    room, rows = _room_print_rows()
+    room_type = rows[0][5]
+    class HashableNamespace(SimpleNamespace):
+        __hash__ = object.__hash__
+
+    kast = HashableNamespace(**rows[0][3].__dict__)
+    content_rows = [rows[0][:3], rows[2][:3]]
+    article = rows[0][1]
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+    class Query:
+        def __init__(self, result=None, results=None):
+            self.result = result
+            self.results = results or []
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def filter_by(self, **kwargs):
+            return self
+
+        def join(self, *args, **kwargs):
+            return self
+
+        def outerjoin(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return self.result
+
+        def all(self):
+            return self.results
+
+    class FakeSession:
+        def query(self, *models):
+            if len(models) == 1 and models[0] is app_module.Ruimte:
+                return Query(result=room)
+            if len(models) == 1 and models[0] is app_module.Ruimte_Type:
+                return Query(result=room_type)
+            if len(models) == 1 and models[0] is app_module.Kast:
+                return Query(results=[kast])
+            if len(models) == 1 and models[0] is app_module.Lokaal_Artikel:
+                return Query(results=[article])
+            return Query(results=content_rows)
+
+    for name, fields in {
+        "Voorraad_Positie": ["lokaal_artikel_id", "kast_id", "bedrijf_id"],
+        "Lokaal_Artikel": ["lokaal_artikel_id", "global_id", "eigen_naam"],
+        "Global_Catalogus": ["global_id"],
+        "Kast": ["kast_id", "ruimte_id", "bedrijf_id"],
+        "Ruimte": ["ruimte_id", "ruimte_type_id", "bedrijf_id"],
+        "Ruimte_Type": ["ruimte_type_id", "bedrijf_id"],
+    }.items():
+        monkeypatch.setattr(
+            app_module,
+            name,
+            SimpleNamespace(**{field: FakeField() for field in fields}),
+        )
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = app_module.app.test_client().get("/assistent/kamer/9")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Kanban-kaartjes (1)" in html
+    assert "Locatiekaartjes (2)" in html
+    assert "/assistent/kamer/9/print/kanban" in html
+    assert "/assistent/kamer/9/print/locatie" in html
+
+
 class _CatalogQuery:
     def __init__(self, global_item):
         self.global_item = global_item
