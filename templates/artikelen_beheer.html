@@ -198,7 +198,7 @@
 <div class="modal fade" id="bewerkModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <form method="POST" enctype="multipart/form-data">
+            <form method="POST" enctype="multipart/form-data" onsubmit="return confirmArticleImpact()">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <div class="modal-header">
                     <h5 class="modal-title">Artikel Bewerken</h5>
@@ -233,6 +233,9 @@
                         </div>
                         <div class="form-text">Deze standaard geldt voor Kanban-posities zonder lokale afwijking.</div>
                     </fieldset>
+                    <div class="alert alert-warning py-2 small" id="bewerkImpact" role="status">
+                        Wijzigingseffect wordt geladen...
+                    </div>
                     <div class="mb-3">
                         <label class="form-label">Eigen Foto Uploaden</label>
                         <input type="file" name="afbeelding" class="form-control" accept=".png">
@@ -300,6 +303,8 @@
 </div>
 
 <script>
+    var articleImpactState = { items: [], originalMin: '', originalRefill: '' }
+
     // Bewerk Modal
     var bewerkModal = document.getElementById('bewerkModal')
     bewerkModal.addEventListener('show.bs.modal', function (event) {
@@ -310,7 +315,55 @@
         document.getElementById('bewerkKanbanMin').value = button.getAttribute('data-kanban-min')
         document.getElementById('bewerkKanbanRefill').value = button.getAttribute('data-kanban-refill')
         document.getElementById('bronInfo').textContent = "Bron: " + button.getAttribute('data-bron')
+        articleImpactState = {
+            items: [],
+            originalMin: button.getAttribute('data-kanban-min'),
+            originalRefill: button.getAttribute('data-kanban-refill')
+        }
+        document.getElementById('bewerkKanbanMin').oninput = renderArticleImpact
+        document.getElementById('bewerkKanbanRefill').oninput = renderArticleImpact
+        loadArticleImpact(button.getAttribute('data-id'))
     })
+
+    function renderArticleImpact() {
+        var impact = document.getElementById('bewerkImpact')
+        var newMin = document.getElementById('bewerkKanbanMin').value
+        var newRefill = document.getElementById('bewerkKanbanRefill').value
+        var changed = newMin !== articleImpactState.originalMin || newRefill !== articleImpactState.originalRefill
+        var inherited = changed ? articleImpactState.items.filter(item => item.erft_standaard).length : 0
+
+        if (!changed) {
+            impact.textContent = 'Geen wijziging van de Artikel-Kanbanstandaard; bestaande posities blijven ongewijzigd.'
+        } else if (inherited === 0) {
+            impact.textContent = 'Geen Kanban-posities zonder lokale afwijking; lokale instellingen blijven ongewijzigd.'
+        } else {
+            impact.textContent = inherited + ' Kanban-positie(s) zonder lokale afwijking nemen de nieuwe standaard automatisch over.'
+        }
+    }
+
+    function loadArticleImpact(id) {
+        var impact = document.getElementById('bewerkImpact')
+        impact.textContent = 'Wijzigingseffect wordt geladen...'
+        impact.classList.remove('d-none')
+        fetch('/api/artikel-gebruik/' + id)
+            .then(response => response.json())
+            .then(data => {
+                articleImpactState.items = data
+                renderArticleImpact()
+            })
+            .catch(() => {
+                impact.textContent = 'Het wijzigingseffect kon niet worden geladen.'
+            })
+    }
+
+    function confirmArticleImpact() {
+        var newMin = document.getElementById('bewerkKanbanMin').value
+        var newRefill = document.getElementById('bewerkKanbanRefill').value
+        var changed = newMin !== articleImpactState.originalMin || newRefill !== articleImpactState.originalRefill
+        var inherited = articleImpactState.items.filter(item => item.erft_standaard).length
+        if (!changed || inherited === 0) return true
+        return window.confirm(inherited + ' Kanban-positie(s) nemen de nieuwe Artikel-Kanbanstandaard over. Doorgaan?')
+    }
 
     // Vervang Modal
     var vervangModal = document.getElementById('vervangModal')
@@ -337,7 +390,7 @@
                     data.forEach(item => {
                         list.innerHTML += `<li class="list-group-item d-flex justify-content-between">
                             <span><strong>${item.ruimte}</strong> - ${item.kast}</span>
-                            <span class="badge bg-light text-dark border">Min: ${item.min} / Max: ${item.max}</span>
+                            <span class="badge bg-light text-dark border">${item.materiaaltype === 'STANDAARD' ? 'Standaard' : `Min: ${item.min} / Aanv.: ${item.aanv}`}</span>
                         </li>`;
                     });
                 }

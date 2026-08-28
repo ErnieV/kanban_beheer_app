@@ -60,6 +60,7 @@
                 </thead>
                 <tbody>
                     {% for item in queue_items %}
+                    {% set effectieve_kanban = effective_queue_settings(item) %}
                     <tr>
                         <!-- HEADER INFO & LOGO -->
                         <td>
@@ -102,8 +103,12 @@
                         <!-- LOGISTIEK -->
                         <td>
                             <div class="d-flex flex-column gap-1">
-                                <span class="badge bg-light text-dark border">Min: {{ item.min_level }}</span>
-                                <span class="badge bg-light text-dark border">Max: {{ item.max_level }}</span>
+                                {% if effectieve_kanban %}
+                                    <span class="badge bg-light text-dark border">Min: {{ effectieve_kanban.min_level }}</span>
+                                    <span class="badge bg-light text-dark border">Aanv.: {{ effectieve_kanban.refill_quantity }}</span>
+                                {% else %}
+                                    <span class="text-muted">Geen Kanban-instelling</span>
+                                {% endif %}
                             </div>
                         </td>
 
@@ -151,8 +156,8 @@
                                         data-img="{{ item.product_image_url }}"
                                         data-logo="{{ item.company_logo_url }}"
                                         data-location="{{ item.location_text }}"
-                                        data-min="{{ item.min_level }}"
-                                        data-max="{{ item.max_level }}"
+                                        data-min="{{ effectieve_kanban.min_level if effectieve_kanban else '' }}"
+                                        data-refill="{{ effectieve_kanban.refill_quantity if effectieve_kanban else '' }}"
                                         data-qr="{{ item.qr_code_value }}"
                                         data-human="{{ item.qr_human_readable }}">
                                     <i class="bi bi-eye"></i> Voorbeeld
@@ -276,7 +281,7 @@
             location: (dataset.location || '').split('(')[0].trim(),
             locationRaw: dataset.location || '',
             minLevel: dataset.min || '',
-            maxLevel: dataset.max || '',
+            refillQuantity: dataset.refill || '',
             qrCodeValue: dataset.qr || '',
             humanReadableCode: dataset.human || ''
         };
@@ -341,7 +346,7 @@
         if (elementMatches(element, ['sku'])) return data.sku;
         if (elementMatches(element, ['location'])) return data.location;
         if (elementMatches(element, ['minlevel', 'min-level', 'min level'])) return String(data.minLevel);
-        if (elementMatches(element, ['maxlevel', 'max-level', 'max level'])) return String(data.maxLevel);
+        if (elementMatches(element, ['refillquantity', 'refill-quantity', 'refill quantity', 'aanvulhoeveelheid', 'aanv'])) return String(data.refillQuantity);
         if (elementMatches(element, ['humanreadablecode', 'human-readable', 'human readable', 'code'])) return data.humanReadableCode;
         return firstDefined(element, ['text', 'label', 'defaultText'], '');
     }

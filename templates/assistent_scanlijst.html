@@ -55,7 +55,7 @@
                                 <thead class="table-light">
                                     <tr>
                                         <th style="width: 34%;">Artikel</th>
-                                        <th style="width: 12%;">Min / Max</th>
+                                        <th style="width: 12%;">Kanban</th>
                                         <th style="width: 12%;">Eenheid</th>
                                         <th style="width: 14%;">Code</th>
                                         <th style="width: 16%;">Laatst gescand</th>
@@ -64,6 +64,7 @@
                                 </thead>
                                 <tbody>
                                     {% for scan_item, kaart, positie, artikel, globaal, kast, ruimte, ruimte_type, bedrijf, vestiging in kast_group.scan_rows %}
+                                    {% set kanban = kanban_display_values(positie, artikel) %}
                                     <tr>
                                         <td>
                                             {% set product_image = (positie.locatie_foto_url if positie and positie.locatie_foto_url else (artikel.foto_url if artikel and artikel.foto_url else (globaal.foto_url if globaal and globaal.foto_url else None))) %}
@@ -84,8 +85,12 @@
                                             </div>
                                         </td>
                                         <td>
-                                            <span class="badge bg-light text-dark border">Min {{ positie.trigger_min if positie else '-' }}</span>
-                                            <span class="badge bg-light text-dark border">Max {{ positie.target_max if positie else '-' }}</span>
+                                            {% if kanban.min_level is not none %}
+                                                <span class="badge bg-light text-dark border">Min {{ kanban.min_level }}</span>
+                                                <span class="badge bg-light text-dark border">Aanv. {{ kanban.refill_quantity }}</span>
+                                            {% else %}
+                                                <span class="text-muted">Standaard</span>
+                                            {% endif %}
                                         </td>
                                         <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
                                         <td><span class="font-monospace">{{ kaart.human_code }}</span></td>

@@ -15,7 +15,7 @@
         <h2 class="mb-0">{{ kast.naam }}</h2>
         <div class="text-muted small">
             <span class="me-3"><i class="bi bi-building me-1"></i>{{ kast.type_opslag }}</span>
-            <span><i class="bi bi-card-checklist me-1"></i>Kanban Configuratie</span>
+                        <span><i class="bi bi-card-checklist me-1"></i>Voorraadposities</span>
         </div>
     </div>
 </div>
@@ -45,20 +45,8 @@
                         </select>
                     </div>
                     
-                    <div class="col-6">
-                        <label class="form-label small fw-bold text-muted text-uppercase">Min (Trigger)</label>
-                        <div class="input-group shadow-sm">
-                            <span class="input-group-text bg-white border-end-0 text-warning"><i class="bi bi-bell-fill"></i></span>
-                            <input type="number" name="trigger_min" class="form-control border-start-0" value="2" required>
-                        </div>
-                    </div>
-                    
-                    <div class="col-6">
-                        <label class="form-label small fw-bold text-muted text-uppercase">Max (Target)</label>
-                        <div class="input-group shadow-sm">
-                            <span class="input-group-text bg-white border-end-0 text-success"><i class="bi bi-bullseye"></i></span>
-                            <input type="number" name="target_max" class="form-control border-start-0" value="5" required>
-                        </div>
+                    <div class="col-12">
+                        <div class="form-text">De Artikel-Kanbanstandaard bepaalt Min en Aanv. voor nieuwe Kanban-posities.</div>
                     </div>
                     
                     <div class="col-12">
@@ -90,12 +78,13 @@
                         <tr>
                             <th class="ps-4 text-secondary text-uppercase small fw-bold">Artikel & Locatie</th>
                             <th class="text-center text-secondary text-uppercase small fw-bold">Min</th>
-                            <th class="text-center text-secondary text-uppercase small fw-bold">Max</th>
+                            <th class="text-center text-secondary text-uppercase small fw-bold">Aanv.</th>
                             <th class="text-end pe-4 text-secondary text-uppercase small fw-bold">Status</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for positie, artikel, global in inhoud %}
+                        {% set kanban = kanban_display_values(positie, artikel) %}
                         <tr>
                             <td class="ps-4">
                                 <div class="d-flex align-items-center">
@@ -122,10 +111,18 @@
                                 </div>
                             </td>
                             <td class="text-center">
-                                <span class="badge bg-warning text-warning bg-opacity-10 border border-warning border-opacity-25 px-3 rounded-pill">{{ positie.trigger_min }}</span>
+                                {% if kanban.min_level is not none %}
+                                    <span class="badge bg-warning text-warning bg-opacity-10 border border-warning border-opacity-25 px-3 rounded-pill">{{ kanban.min_level }}</span>
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
                             </td>
                             <td class="text-center">
-                                <span class="badge bg-success text-success bg-opacity-10 border border-success border-opacity-25 px-3 rounded-pill">{{ positie.target_max }}</span>
+                                {% if kanban.refill_quantity is not none %}
+                                    <span class="badge bg-success text-success bg-opacity-10 border border-success border-opacity-25 px-3 rounded-pill">{{ kanban.refill_quantity }}</span>
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
                             </td>
                             <td class="text-end pe-4">
                                 <button class="btn btn-icon btn-sm btn-light text-muted" title="Opties">

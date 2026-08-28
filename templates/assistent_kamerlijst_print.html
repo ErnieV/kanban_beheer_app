@@ -63,13 +63,14 @@
                                 <thead class="table-light">
                                     <tr>
                                         <th>Artikel</th>
-                                        <th>Min / Max</th>
+                                        <th>Kanban</th>
                                         <th>Eenheid</th>
                                         <th>SKU</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {% for positie, artikel, globaal, kast, ruimte, ruimte_type, vestiging in kast_group.inventory_rows %}
+                                    {% set kanban = kanban_display_values(positie, artikel) %}
                                     <tr>
                                         <td>
                                             {% set product_image = (positie.locatie_foto_url if positie and positie.locatie_foto_url else (artikel.foto_url if artikel and artikel.foto_url else (globaal.foto_url if globaal and globaal.foto_url else None))) %}
@@ -84,7 +85,13 @@
                                                 </div>
                                             </div>
                                         </td>
-                                        <td>Min {{ positie.trigger_min if positie else '-' }} / Max {{ positie.target_max if positie else '-' }}</td>
+                                        <td>
+                                            {% if kanban.min_level is not none %}
+                                                Min {{ kanban.min_level }} / Aanv. {{ kanban.refill_quantity }}
+                                            {% else %}
+                                                Standaard
+                                            {% endif %}
+                                        </td>
                                         <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
                                         <td class="font-monospace">{{ sku_value }}</td>
                                     </tr>

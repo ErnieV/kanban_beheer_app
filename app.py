@@ -10,6 +10,7 @@ import base64
 import mimetypes
 import threading
 import time
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 import requests
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, abort
@@ -99,6 +100,8 @@ class KanbanKaart(db.Model):
     location_text = db.Column(db.String(255), nullable=False)
     product_sku = db.Column(db.String(64), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='PENDING_PRINT')
+    content_min_level = db.Column(db.Integer, nullable=True)
+    content_refill_quantity = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     printed_at = db.Column(db.DateTime, nullable=True)
     cancelled_at = db.Column(db.DateTime, nullable=True)
@@ -142,6 +145,13 @@ def ensure_kanban_settings_schema():
             'materiaaltype': 'NVARCHAR(20) NULL',
             'kanban_min_override': 'INTEGER NULL',
             'kanban_refill_quantity_override': 'INTEGER NULL',
+        },
+        'Print_Queue': {
+            'refill_quantity': 'INTEGER NULL',
+        },
+        'Kanban_Kaart': {
+            'content_min_level': 'INTEGER NULL',
+            'content_refill_quantity': 'INTEGER NULL',
         },
     }
 
@@ -442,6 +452,35 @@ def position_kanban_override_values(position, article):
     return _position_overrides(position, article)
 
 
+def kanban_display_values(position, article):
+    """Return the user-facing effective values and deviation flags."""
+    material_type = _position_material_type(position)
+    if material_type is Materiaaltype.STANDAARD:
+        return {
+            'materiaaltype': material_type.value,
+            'min_level': None,
+            'refill_quantity': None,
+            'min_is_override': False,
+            'refill_is_override': False,
+        }
+
+    standard = _article_kanban_standard(article)
+    effective = effective_position_kanban_settings(position, article)
+    min_override, refill_override = position_kanban_override_values(
+        position,
+        article,
+    )
+    return {
+        'materiaaltype': material_type.value,
+        'min_level': effective.min_level,
+        'refill_quantity': effective.refill_quantity,
+        'min_is_override': min_override is not None,
+        'refill_is_override': refill_override is not None,
+        'standard_min_level': standard.min_level,
+        'standard_refill_quantity': standard.refill_quantity,
+    }
+
+
 def _set_article_kanban_standard(article, standard):
     setattr(article, 'kanban_min', standard.min_level)
     setattr(article, 'kanban_refill_quantity', standard.refill_quantity)
@@ -500,18 +539,12 @@ def _set_position_kanban_values(position, article, form):
     setattr(position, 'kanban_min_override', min_override)
     setattr(position, 'kanban_refill_quantity_override', refill_override)
 
-    # Keep the old columns synchronized only as temporary migration
-    # compatibility.  The new behavior is always read from the fields above.
+    # Do not write the legacy absolute target from the user-facing flow.  The
+    # old columns remain readable for the later migration, and are cleared
+    # when a position stops being Kanban material.
     if effective is None:
         setattr(position, 'trigger_min', None)
         setattr(position, 'target_max', None)
-    else:
-        setattr(position, 'trigger_min', effective.min_level)
-        setattr(
-            position,
-            'target_max',
-            effective.min_level + effective.refill_quantity,
-        )
 
 
 app.jinja_env.globals['effective_position_kanban_settings'] = (
@@ -522,6 +555,7 @@ app.jinja_env.globals['position_material_type'] = _position_material_type
 app.jinja_env.globals['position_kanban_override_values'] = (
     position_kanban_override_values
 )
+app.jinja_env.globals['kanban_display_values'] = kanban_display_values
 
 
 def _create_kanban_card(pos, art, kast, ruimte, bedrijf):
@@ -529,6 +563,11 @@ def _create_kanban_card(pos, art, kast, ruimte, bedrijf):
     while db.session.query(KanbanKaart).filter(KanbanKaart.human_code == human_code).first():
         human_code = _generate_human_code()
 
+    effective = effective_position_kanban_settings(pos, art)
+    if effective is None:
+        raise KanbanSettingsError(
+            'Standaard materiaal kan geen Kanban-kaart aanvragen.'
+        )
     card = KanbanKaart(
         kaart_id=str(uuid.uuid4()),
         bedrijf_id=bedrijf.bedrijf_id,
@@ -538,6 +577,8 @@ def _create_kanban_card(pos, art, kast, ruimte, bedrijf):
         product_name=art.eigen_naam,
         location_text=f"{kast.naam} ({kast.type_opslag})",
         product_sku=str(art.lokaal_artikel_id),
+        content_min_level=effective.min_level,
+        content_refill_quantity=effective.refill_quantity,
         status='PENDING_PRINT',
         created_at=utcnow()
     )
@@ -568,15 +609,89 @@ def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
         product_image_url=pos.locatie_foto_url or art.foto_url or (global_item.foto_url if global_item else None),
         location_text=f"{kast.naam} ({kast.type_opslag})",
         min_level=effective.min_level,
-        max_level=effective.min_level + effective.refill_quantity,
+        refill_quantity=effective.refill_quantity,
         qr_code_value=_generate_public_scan_url(card.public_token),
         qr_human_readable=card.human_code,
         company_logo_url=bedrijf.logo_url
     )
     if hasattr(Print_Queue, 'kaart_id'):
         queue_kwargs['kaart_id'] = card.kaart_id
+    if not hasattr(Print_Queue, 'refill_quantity'):
+        queue_kwargs.pop('refill_quantity', None)
+    if not hasattr(Print_Queue, 'max_level'):
+        queue_kwargs.pop('max_level', None)
 
     return Print_Queue(**queue_kwargs)
+
+
+def _effective_settings_from_standard(position, standard):
+    """Resolve a position against an explicitly supplied Article standard."""
+    min_override, refill_override = _position_overrides(
+        position,
+        SimpleNamespace(
+            kanban_min=standard.min_level,
+            kanban_refill_quantity=standard.refill_quantity,
+        ),
+    )
+    return effective_kanban_settings(
+        _position_material_type(position),
+        standard,
+        min_override,
+        refill_override,
+    )
+
+
+def _supersede_cards_for_article(article_id, old_standard, new_standard):
+    """Mark existing Kanban cards stale when their effective content changed."""
+    query = getattr(db.session, 'query', None)
+    if not query or not Voorraad_Positie:
+        return
+
+    try:
+        rows = query(KanbanKaart, Voorraad_Positie).join(
+            Voorraad_Positie,
+            KanbanKaart.voorraad_positie_id
+            == Voorraad_Positie.voorraad_positie_id,
+        ).filter(
+            Voorraad_Positie.lokaal_artikel_id == article_id,
+        ).all()
+    except (AttributeError, TypeError):
+        return
+
+    for card, position in rows:
+        old_effective = _effective_settings_from_standard(
+            position,
+            old_standard,
+        )
+        new_effective = _effective_settings_from_standard(
+            position,
+            new_standard,
+        )
+        if old_effective != new_effective and getattr(card, 'status', None) in {
+            'PENDING_PRINT',
+            'PRINTED',
+        }:
+            card.status = 'SUPERSEDED'
+
+
+def _supersede_cards_for_position(position, old_effective, new_effective):
+    """Mark the position's existing Kanban cards stale after a local change."""
+    if old_effective == new_effective:
+        return
+
+    query = getattr(db.session, 'query', None)
+    if not query:
+        return
+    try:
+        cards = query(KanbanKaart).filter(
+            KanbanKaart.voorraad_positie_id == position.voorraad_positie_id,
+        ).all()
+    except (AttributeError, TypeError):
+        return
+
+    for card in cards:
+        if getattr(card, 'status', None) in {'PENDING_PRINT', 'PRINTED'}:
+            card.status = 'SUPERSEDED'
 
 
 def _get_queue_card(queue_item):
@@ -623,6 +738,48 @@ def _image_to_base64_object(image_source, label):
     encoded = base64.b64encode(response.content).decode("ascii")
     return {"base64Data": f"data:{content_type};base64,{encoded}"}, None
 
+
+def _queue_item_effective_settings(queue_item):
+    """Resolve current effective settings, with a legacy queue fallback."""
+    kaart_id = getattr(queue_item, 'kaart_id', None)
+    query = getattr(db.session, 'query', None)
+    if kaart_id and query and Voorraad_Positie and Lokaal_Artikel:
+        try:
+            card = query(KanbanKaart).filter(
+                KanbanKaart.kaart_id == kaart_id,
+            ).first()
+            position = query(Voorraad_Positie).filter(
+                Voorraad_Positie.voorraad_positie_id
+                == card.voorraad_positie_id,
+            ).first() if card else None
+            article = query(Lokaal_Artikel).filter(
+                Lokaal_Artikel.lokaal_artikel_id
+                == position.lokaal_artikel_id,
+            ).first() if position else None
+            if position and article:
+                return effective_position_kanban_settings(position, article)
+        except (AttributeError, TypeError):
+            pass
+
+    min_level = getattr(queue_item, 'min_level', None)
+    refill_quantity = getattr(queue_item, 'refill_quantity', None)
+    if refill_quantity is None:
+        old_target = getattr(queue_item, 'max_level', None)
+        if min_level is not None and old_target is not None:
+            try:
+                refill_quantity = int(old_target) - int(min_level)
+            except (TypeError, ValueError):
+                return None
+
+    try:
+        return KanbanStandard.from_values(min_level, refill_quantity)
+    except KanbanSettingsError:
+        return None
+
+
+app.jinja_env.globals['effective_queue_settings'] = _queue_item_effective_settings
+
+
 def _build_print_payload(queue_item):
     product = {
         "name": queue_item.product_name or "",
@@ -646,6 +803,10 @@ def _build_print_payload(queue_item):
         return None, company_logo_error
     company["logo"] = company_logo
 
+    effective = _queue_item_effective_settings(queue_item)
+    if effective is None:
+        return None, "Standaard materiaal kan niet als Kanban-kaart worden geprint."
+
     return {
         "printerId": queue_item.printer_id or "reception-badgy-01",
         "cardType": queue_item.card_type or "KANBAN_TWO_BIN",
@@ -659,8 +820,8 @@ def _build_print_payload(queue_item):
             "company": company,
             "logistics": {
                 "location": queue_item.location_text or "",
-                "minLevel": int(queue_item.min_level or 0),
-                "maxLevel": int(queue_item.max_level or 0)
+                "minLevel": effective.min_level,
+                "refillQuantity": effective.refill_quantity,
             },
             "trigger": {
                 "qrCodeValue": queue_item.qr_code_value or "",
@@ -1054,7 +1215,10 @@ def update_voorraad_positie(voorraad_positie_id):
 
     try:
         artikel = get_scoped_item(Lokaal_Artikel, positie.lokaal_artikel_id, bedrijf_id)
+        old_effective = effective_position_kanban_settings(positie, artikel)
         _set_position_kanban_values(positie, artikel, request.form)
+        new_effective = effective_position_kanban_settings(positie, artikel)
+        _supersede_cards_for_position(positie, old_effective, new_effective)
     except KanbanSettingsError as exc:
         flash(str(exc), 'danger')
         return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
@@ -1080,15 +1244,12 @@ def add_to_kast_from_room(kast_id):
         lokaal_artikel_id=artikel_id
     ).first()
     if not bestaat:
-        standard = _article_kanban_standard(artikel)
         nieuw = Voorraad_Positie(
             bedrijf_id=bedrijf_id, kast_id=kast_id, lokaal_artikel_id=artikel_id,
             strategie='TWO_BIN',
             materiaaltype=Materiaaltype.KANBAN.value,
             kanban_min_override=None,
             kanban_refill_quantity_override=None,
-            trigger_min=standard.min_level,
-            target_max=standard.min_level + standard.refill_quantity,
         )
         db.session.add(nieuw)
         db.session.flush()
@@ -1597,6 +1758,7 @@ def artikelen_beheer():
             artikel = get_scoped_item(Lokaal_Artikel, artikel_id, bedrijf_id)
             if artikel:
                 try:
+                    old_standard = _article_kanban_standard(artikel)
                     standard = KanbanStandard.from_values(
                         request.form.get('kanban_min'),
                         request.form.get('kanban_refill_quantity'),
@@ -1607,6 +1769,11 @@ def artikelen_beheer():
 
                 artikel.eigen_naam = request.form.get('naam')
                 artikel.verpakkingseenheid_tekst = request.form.get('eenheid')
+                _supersede_cards_for_article(
+                    artikel_id,
+                    old_standard,
+                    standard,
+                )
                 _set_article_kanban_standard(artikel, standard)
                 file = request.files.get('afbeelding')
                 if file:
@@ -1682,7 +1849,22 @@ def api_artikel_gebruik(artikel_id):
             Voorraad_Positie.lokaal_artikel_id == artikel_id,
             Voorraad_Positie.bedrijf_id == bedrijf_id
         ).all()
-    return jsonify([{'ruimte': r.naam, 'kast': k.naam, 'min': p.trigger_min, 'max': p.target_max} for p, k, r in posities])
+    usage = []
+    for position, storage_location, room in posities:
+        display = kanban_display_values(position, artikel)
+        usage.append({
+            'ruimte': room.naam,
+            'kast': storage_location.naam,
+            'materiaaltype': display['materiaaltype'],
+            'min': display['min_level'],
+            'aanv': display['refill_quantity'],
+            'erft_standaard': (
+                display['materiaaltype'] == Materiaaltype.KANBAN.value
+                and not display['min_is_override']
+                and not display['refill_is_override']
+            ),
+        })
+    return jsonify(usage)
 
 @app.route('/beheer/catalogus', methods=['GET', 'POST'])
 def beheer_catalogus():
@@ -1800,10 +1982,6 @@ def beheer_infra():
                                 pos.lokaal_artikel_id,
                                 bedrijf_id,
                             )
-                            effective = effective_position_kanban_settings(
-                                pos,
-                                artikel,
-                            )
                             override_min, override_refill = (
                                 position_kanban_override_values(pos, artikel)
                             )
@@ -1820,12 +1998,6 @@ def beheer_infra():
                                 materiaaltype=_position_material_type(pos).value,
                                 kanban_min_override=override_min,
                                 kanban_refill_quantity_override=override_refill,
-                                trigger_min=effective.min_level if effective else None,
-                                target_max=(
-                                    effective.min_level + effective.refill_quantity
-                                    if effective
-                                    else None
-                                ),
                                 locatie_foto_url=pos.locatie_foto_url,
                             )
                             db.session.add(nieuw_pos)
