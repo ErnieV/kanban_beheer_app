@@ -155,8 +155,6 @@ def test_position_edit_is_a_user_facing_flask_flow_for_independent_overrides(
     assert response.status_code == 302
     assert position.kanban_min_override == 5
     assert position.kanban_refill_quantity_override == 2
-    assert position.trigger_min == 1
-    assert position.target_max == 2
 
 
 def test_new_position_defaults_to_kanban_material(app_module, monkeypatch):
@@ -236,24 +234,6 @@ def test_new_position_uses_the_current_article_standard_after_a_change(
         position,
         article,
     ) == KanbanStandard(3, 4)
-
-
-def test_existing_legacy_position_inherits_current_article_standard_after_cutover(
-    app_module,
-):
-    position = SimpleNamespace(
-        materiaaltype=None,
-        kanban_min_override=None,
-        kanban_refill_quantity_override=None,
-        trigger_min=2,
-        target_max=5,
-    )
-    article = SimpleNamespace(kanban_min=1, kanban_refill_quantity=1)
-
-    assert app_module.effective_position_kanban_settings(
-        position,
-        article,
-    ) == KanbanStandard(2, 3)
 
 
 def test_expand_schema_adds_new_nullable_columns_without_rewriting_legacy_data(
@@ -342,7 +322,6 @@ def test_position_switch_to_standard_clears_all_kanban_values(app_module, monkey
     assert response.status_code == 302
     assert position.kanban_min_override is None
     assert position.kanban_refill_quantity_override is None
-    assert position.trigger_min is None
     assert position.strategie == "STANDARD"
 
 

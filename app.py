@@ -393,37 +393,9 @@ def _position_material_type(position):
     return normalize_material_type(getattr(position, 'materiaaltype', None))
 
 
-def _legacy_position_overrides(position):
-    """Read valid old position values until the Max migration is complete."""
-    old_min = getattr(position, 'trigger_min', None)
-    old_target = getattr(position, 'target_max', None)
-    if old_min is None or old_target is None:
-        return None, None
-
-    try:
-        old_min = int(old_min)
-        old_refill = int(old_target) - old_min
-    except (TypeError, ValueError):
-        return None, None
-    if old_min < 0 or old_refill < 1:
-        return None, None
-    return old_min, old_refill
-
-
 def _normalized_position_overrides_for_standard(position, standard):
-    raw_material_type = getattr(position, 'materiaaltype', None)
     min_override = getattr(position, 'kanban_min_override', None)
     refill_override = getattr(position, 'kanban_refill_quantity_override', None)
-
-    # Rows from before the expand step have no material type or new override
-    # fields. Preserve their effective legacy values until ticket #10 migrates
-    # them into explicit Article standards and position deviations.
-    if (
-        raw_material_type is None
-        and min_override is None
-        and refill_override is None
-    ):
-        min_override, refill_override = _legacy_position_overrides(position)
 
     return normalized_position_overrides(
         _position_material_type(position),
@@ -498,26 +470,11 @@ def _set_new_article_defaults(article):
 
 
 def _position_form_values(form, standard):
-    min_override = form.get('kanban_min_override')
-    refill_override = form.get('kanban_refill_quantity_override')
-
-    # Accept the old form names while old pages or bookmarks are still in use.
-    if min_override is None and refill_override is None:
-        old_min = form.get('trigger_min')
-        old_target = form.get('target_max')
-        if old_min not in (None, '') and old_target not in (None, ''):
-            try:
-                min_override = int(old_min)
-                refill_override = int(old_target) - min_override
-            except (TypeError, ValueError):
-                min_override = old_min
-                refill_override = old_target
-
     return normalized_position_overrides(
         Materiaaltype.KANBAN,
         standard,
-        min_override,
-        refill_override,
+        form.get('kanban_min_override'),
+        form.get('kanban_refill_quantity_override'),
     )
 
 
@@ -527,10 +484,9 @@ def _set_position_kanban_values(position, article, form):
 
     if material_type is Materiaaltype.STANDAARD:
         min_override, refill_override = None, None
-        effective = None
     else:
         min_override, refill_override = _position_form_values(form, standard)
-        effective = effective_kanban_settings(
+        effective_kanban_settings(
             material_type,
             standard,
             min_override,
@@ -545,14 +501,6 @@ def _set_position_kanban_values(position, article, form):
     )
     setattr(position, 'kanban_min_override', min_override)
     setattr(position, 'kanban_refill_quantity_override', refill_override)
-
-    # Do not write the legacy absolute target from the user-facing flow.  The
-    # old columns remain readable for the later migration, and are cleared
-    # when a position stops being Kanban material.
-    if effective is None:
-        setattr(position, 'trigger_min', None)
-        setattr(position, 'target_max', None)
-
 
 app.jinja_env.globals['effective_position_kanban_settings'] = (
     effective_position_kanban_settings
@@ -800,20 +748,13 @@ def _queue_item_source(queue_item, source_map=None):
 
 
 def _queue_item_effective_settings(queue_item, source_map=None):
-    """Resolve current effective settings, with a legacy queue fallback."""
+    """Resolve current effective settings from the linked card or queue row."""
     position, article = _queue_item_source(queue_item, source_map)
     if position and article:
         return effective_position_kanban_settings(position, article)
 
     min_level = getattr(queue_item, 'min_level', None)
     refill_quantity = getattr(queue_item, 'refill_quantity', None)
-    if refill_quantity is None:
-        old_target = getattr(queue_item, 'max_level', None)
-        if min_level is not None and old_target is not None:
-            try:
-                refill_quantity = int(old_target) - int(min_level)
-            except (TypeError, ValueError):
-                return None
 
     try:
         return KanbanStandard.from_values(min_level, refill_quantity)

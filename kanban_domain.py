@@ -1,9 +1,7 @@
 """Domain rules for material types and effective Kanban settings.
 
-The management application still reads the legacy Min/Max columns while the
-data migration is pending.  This module deliberately only exposes the new
-Kanban meaning: an article standard with Min and refill quantity, optionally
-overridden per inventory position.
+The module exposes one Kanban meaning: an Article standard with Min and refill
+quantity, optionally overridden per inventory position.
 """
 
 from dataclasses import dataclass
