@@ -60,9 +60,10 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for item in queue_items %}
-                    {% set effectieve_kanban = queue_display_values(item) %}
-                    {% set kaart_verouderd = queue_item_is_superseded(item) %}
+                    {% for queue_row in queue_rows %}
+                    {% set item = queue_row.item %}
+                    {% set effectieve_kanban = queue_row.display_values %}
+                    {% set kaart_verouderd = queue_row.is_superseded %}
                     <tr>
                         <!-- HEADER INFO & LOGO -->
                         <td>

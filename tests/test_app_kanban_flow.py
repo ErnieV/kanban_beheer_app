@@ -600,7 +600,114 @@ def test_print_service_payload_uses_refill_quantity_without_max_level(
         captured["payload"] = json
         return FakeResponse()
 
+    card = SimpleNamespace(
+        kaart_id="kaart-7",
+        voorraad_positie_id=12,
+        status="PRINTED",
+    )
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        lokaal_artikel_id=7,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+        def in_(self, values):
+            return True
+
+    class CardQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return card
+
+    class SourceQuery:
+        def outerjoin(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return card, position, article
+
+    class FakeSession:
+        def query(self, *models):
+            return CardQuery() if len(models) == 1 else SourceQuery()
+
     queue_item = SimpleNamespace(
+        kaart_id="kaart-7",
+        printer_id="reception-badgy-01",
+        card_type="KANBAN_TWO_BIN",
+        header_text="KAMER",
+        header_color="#123456",
+        product_name="Verband",
+        product_packaging="doos",
+        product_sku="7",
+        product_image_url="data:image/png;base64,AA==",
+        company_logo_url="data:image/png;base64,AA==",
+        location_text="Kast A",
+        min_level=99,
+        refill_quantity=99,
+        max_level=7,
+        qr_code_value="https://example.test/scan/token",
+        qr_human_readable="KB-1234",
+    )
+
+    monkeypatch.setattr(app_module, "PRINT_SERVICE_URL", "http://print.test")
+    monkeypatch.setattr(app_module, "PRINT_SERVICE_REQUIRE_API_KEY", False)
+    monkeypatch.setattr(app_module.requests, "post", fake_post)
+    monkeypatch.setattr(
+        app_module,
+        "KanbanKaart",
+        SimpleNamespace(
+            kaart_id=FakeField(),
+            voorraad_positie_id=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Voorraad_Positie",
+        SimpleNamespace(
+            voorraad_positie_id=FakeField(),
+            lokaal_artikel_id=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Lokaal_Artikel",
+        SimpleNamespace(lokaal_artikel_id=FakeField()),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    sent, error = app_module.send_queue_item_to_print_service(queue_item)
+
+    assert sent is True
+    assert error is None
+    logistics = captured["payload"]["data"]["logistics"]
+    assert logistics == {"location": "Kast A", "minLevel": 3, "refillQuantity": 4}
+    assert "maxLevel" not in str(captured["payload"])
+
+
+def test_user_facing_print_route_sends_to_fake_print_service(
+    app_module, monkeypatch
+):
+    captured = {}
+    queue_item = SimpleNamespace(
+        print_id=7,
+        bedrijf_id=1,
+        status="PENDING",
         printer_id="reception-badgy-01",
         card_type="KANBAN_TWO_BIN",
         header_text="KAMER",
@@ -613,22 +720,78 @@ def test_print_service_payload_uses_refill_quantity_without_max_level(
         location_text="Kast A",
         min_level=3,
         refill_quantity=4,
-        max_level=7,
         qr_code_value="https://example.test/scan/token",
         qr_human_readable="KB-1234",
     )
 
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+    class QueueQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return queue_item
+
+    class FakeSession:
+        def query(self, *models):
+            return QueueQuery()
+
+        def delete(self, item):
+            captured["deleted"] = item
+
+        def commit(self):
+            captured["committed"] = True
+
+    class FakeResponse:
+        status_code = 202
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "ACCEPTED", "jobId": "job-7"}
+
+    def fake_post(url, json, headers, timeout, allow_redirects):
+        captured["payload"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "test_print_service_connectivity",
+        lambda: (True, "ok"),
+    )
     monkeypatch.setattr(app_module, "PRINT_SERVICE_URL", "http://print.test")
     monkeypatch.setattr(app_module, "PRINT_SERVICE_REQUIRE_API_KEY", False)
     monkeypatch.setattr(app_module.requests, "post", fake_post)
+    monkeypatch.setattr(
+        app_module,
+        "Print_Queue",
+        SimpleNamespace(
+            print_id=FakeField(),
+            bedrijf_id=FakeField(),
+            status=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
 
-    sent, error = app_module.send_queue_item_to_print_service(queue_item)
+    response = _csrf_client(app_module).post(
+        "/assistent/print-queue/verstuur/7",
+        data={"_csrf_token": "test-csrf"},
+    )
 
-    assert sent is True
-    assert error is None
-    logistics = captured["payload"]["data"]["logistics"]
-    assert logistics == {"location": "Kast A", "minLevel": 3, "refillQuantity": 4}
-    assert "maxLevel" not in str(captured["payload"])
+    assert response.status_code == 302
+    assert captured["deleted"] is queue_item
+    assert captured["committed"] is True
+    assert captured["payload"]["data"]["logistics"] == {
+        "location": "Kast A",
+        "minLevel": 3,
+        "refillQuantity": 4,
+    }
 
 
 def test_superseded_queue_item_is_not_sent_to_print_service(

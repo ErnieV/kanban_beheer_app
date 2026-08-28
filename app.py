@@ -653,16 +653,13 @@ def _supersede_cards_for_article(article_id, old_standard, new_standard):
     if not query or not Voorraad_Positie:
         return
 
-    try:
-        rows = query(KanbanKaart, Voorraad_Positie).join(
-            Voorraad_Positie,
-            KanbanKaart.voorraad_positie_id
-            == Voorraad_Positie.voorraad_positie_id,
-        ).filter(
-            Voorraad_Positie.lokaal_artikel_id == article_id,
-        ).all()
-    except (AttributeError, TypeError):
-        return
+    rows = query(KanbanKaart, Voorraad_Positie).join(
+        Voorraad_Positie,
+        KanbanKaart.voorraad_positie_id
+        == Voorraad_Positie.voorraad_positie_id,
+    ).filter(
+        Voorraad_Positie.lokaal_artikel_id == article_id,
+    ).all()
 
     cards_to_supersede = []
     for card, position in rows:
@@ -687,12 +684,9 @@ def _supersede_cards_for_position(position, old_effective, new_effective):
     query = getattr(db.session, 'query', None)
     if not query:
         return
-    try:
-        cards = query(KanbanKaart).filter(
-            KanbanKaart.voorraad_positie_id == position.voorraad_positie_id,
-        ).all()
-    except (AttributeError, TypeError):
-        return
+    cards = query(KanbanKaart).filter(
+        KanbanKaart.voorraad_positie_id == position.voorraad_positie_id,
+    ).all()
 
     _mark_cards_superseded(cards)
 
@@ -742,33 +736,71 @@ def _image_to_base64_object(image_source, label):
     return {"base64Data": f"data:{content_type};base64,{encoded}"}, None
 
 
-def _queue_item_source(queue_item):
+def _queue_item_sources(queue_items):
+    """Load all linked queue sources in one query for the queue page."""
+    kaart_ids = {
+        getattr(queue_item, 'kaart_id', None)
+        for queue_item in queue_items
+    }
+    kaart_ids.discard(None)
+    if not kaart_ids:
+        return {}
+
+    rows = db.session.query(
+        KanbanKaart,
+        Voorraad_Positie,
+        Lokaal_Artikel,
+    ).outerjoin(
+        Voorraad_Positie,
+        KanbanKaart.voorraad_positie_id
+        == Voorraad_Positie.voorraad_positie_id,
+    ).outerjoin(
+        Lokaal_Artikel,
+        Voorraad_Positie.lokaal_artikel_id
+        == Lokaal_Artikel.lokaal_artikel_id,
+    ).filter(
+        KanbanKaart.kaart_id.in_(kaart_ids),
+    ).all()
+    return {
+        card.kaart_id: (card, position, article)
+        for card, position, article in rows
+    }
+
+
+def _queue_item_source(queue_item, source_map=None):
     kaart_id = getattr(queue_item, 'kaart_id', None)
+    if source_map is not None:
+        source = source_map.get(kaart_id)
+        return (source[1], source[2]) if source else (None, None)
+
     query = getattr(db.session, 'query', None)
     if kaart_id and query and Voorraad_Positie and Lokaal_Artikel:
-        try:
-            card = query(KanbanKaart).filter(
-                KanbanKaart.kaart_id == kaart_id,
-            ).first()
-            position = query(Voorraad_Positie).filter(
-                Voorraad_Positie.voorraad_positie_id
-                == card.voorraad_positie_id,
-            ).first() if card else None
-            article = query(Lokaal_Artikel).filter(
-                Lokaal_Artikel.lokaal_artikel_id
-                == position.lokaal_artikel_id,
-            ).first() if position else None
+        row = query(
+            KanbanKaart,
+            Voorraad_Positie,
+            Lokaal_Artikel,
+        ).outerjoin(
+            Voorraad_Positie,
+            KanbanKaart.voorraad_positie_id
+            == Voorraad_Positie.voorraad_positie_id,
+        ).outerjoin(
+            Lokaal_Artikel,
+            Voorraad_Positie.lokaal_artikel_id
+            == Lokaal_Artikel.lokaal_artikel_id,
+        ).filter(
+            KanbanKaart.kaart_id == kaart_id,
+        ).first()
+        if row:
+            _, position, article = row
             if position and article:
                 return position, article
-        except (AttributeError, TypeError):
-            pass
 
     return None, None
 
 
-def _queue_item_effective_settings(queue_item):
+def _queue_item_effective_settings(queue_item, source_map=None):
     """Resolve current effective settings, with a legacy queue fallback."""
-    position, article = _queue_item_source(queue_item)
+    position, article = _queue_item_source(queue_item, source_map)
     if position and article:
         return effective_position_kanban_settings(position, article)
 
@@ -788,12 +820,12 @@ def _queue_item_effective_settings(queue_item):
         return None
 
 
-def _queue_item_display_values(queue_item):
-    position, article = _queue_item_source(queue_item)
+def _queue_item_display_values(queue_item, source_map=None):
+    position, article = _queue_item_source(queue_item, source_map)
     if position and article:
         return kanban_display_values(position, article)
 
-    effective = _queue_item_effective_settings(queue_item)
+    effective = _queue_item_effective_settings(queue_item, source_map)
     if not effective:
         return {
             'materiaaltype': Materiaaltype.KANBAN.value,
@@ -817,8 +849,9 @@ app.jinja_env.globals['effective_queue_settings'] = _queue_item_effective_settin
 app.jinja_env.globals['queue_display_values'] = _queue_item_display_values
 
 
-def _queue_item_is_superseded(queue_item):
-    card = _get_queue_card(queue_item)
+def _queue_item_is_superseded(queue_item, source_map=None):
+    source = source_map.get(getattr(queue_item, 'kaart_id', None)) if source_map is not None else None
+    card = source[0] if source else _get_queue_card(queue_item)
     return bool(card and getattr(card, 'status', None) == 'SUPERSEDED')
 
 
@@ -1397,6 +1430,15 @@ def assistent_print_queue():
     queue_items = db.session.query(Print_Queue)\
         .filter(Print_Queue.bedrijf_id == bedrijf_id, Print_Queue.status == 'PENDING')\
         .order_by(Print_Queue.aangemaakt_op.desc()).all()
+    queue_sources = _queue_item_sources(queue_items)
+    queue_rows = [
+        {
+            'item': item,
+            'display_values': _queue_item_display_values(item, queue_sources),
+            'is_superseded': _queue_item_is_superseded(item, queue_sources),
+        }
+        for item in queue_items
+    ]
 
     try:
         _, stale_layout, layout_warning = get_preview_layout()
@@ -1410,6 +1452,7 @@ def assistent_print_queue():
     return render_template(
         'assistent_print_queue.html',
         queue_items=queue_items,
+        queue_rows=queue_rows,
         print_service_url=PRINT_SERVICE_URL,
         preview_layout_warning=preview_layout_warning,
         preview_layout_error=preview_layout_error
