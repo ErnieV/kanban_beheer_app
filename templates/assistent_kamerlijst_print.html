@@ -1,4 +1,5 @@
 <!doctype html>
+{% from "_kanban_values.html" import render_kanban_values %}
 <html lang="nl">
 <head>
     <meta charset="utf-8">
@@ -85,13 +86,7 @@
                                                 </div>
                                             </div>
                                         </td>
-                                        <td>
-                                            {% if kanban.min_level is not none %}
-                                                Min {{ kanban.min_level }} / Aanv. {{ kanban.refill_quantity }}
-                                            {% else %}
-                                                Standaard
-                                            {% endif %}
-                                        </td>
+                                        <td>{{ render_kanban_values(kanban) }}</td>
                                         <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
                                         <td class="font-monospace">{{ sku_value }}</td>
                                     </tr>

@@ -1,0 +1,15 @@
+{% macro render_kanban_values(values, compact=false) -%}
+    {% if values.min_level is not none %}
+        <span class="{% if values.min_is_override %}text-warning fw-semibold{% endif %}"
+              {% if values.min_is_override %}title="Artikel-default: {{ values.standard_min_level }}"{% endif %}>
+            Min {{ values.min_level }}{% if values.min_is_override %} <i class="bi bi-gear-fill small" aria-label="Lokale afwijking"></i>{% endif %}
+        </span>
+        {% if not compact %}<span class="text-muted mx-1">/</span>{% endif %}
+        <span class="{% if values.refill_is_override %}text-warning fw-semibold{% endif %}"
+              {% if values.refill_is_override %}title="Artikel-default: {{ values.standard_refill_quantity }}"{% endif %}>
+            Aanv. {{ values.refill_quantity }}{% if values.refill_is_override %} <i class="bi bi-gear-fill small" aria-label="Lokale afwijking"></i>{% endif %}
+        </span>
+    {% else %}
+        <span class="text-muted">Standaard</span>
+    {% endif %}
+{%- endmacro %}

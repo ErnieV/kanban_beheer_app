@@ -244,7 +244,7 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuleren</button>
-                    <button type="submit" class="btn btn-primary">Opslaan</button>
+                    <button type="submit" class="btn btn-primary" id="bewerkOpslaan">Opslaan</button>
                 </div>
             </form>
         </div>
@@ -303,7 +303,7 @@
 </div>
 
 <script>
-    var articleImpactState = { items: [], originalMin: '', originalRefill: '' }
+    var articleImpactState = { items: [], originalMin: '', originalRefill: '', loaded: false }
 
     // Bewerk Modal
     var bewerkModal = document.getElementById('bewerkModal')
@@ -318,8 +318,10 @@
         articleImpactState = {
             items: [],
             originalMin: button.getAttribute('data-kanban-min'),
-            originalRefill: button.getAttribute('data-kanban-refill')
+            originalRefill: button.getAttribute('data-kanban-refill'),
+            loaded: false
         }
+        document.getElementById('bewerkOpslaan').disabled = true
         document.getElementById('bewerkKanbanMin').oninput = renderArticleImpact
         document.getElementById('bewerkKanbanRefill').oninput = renderArticleImpact
         loadArticleImpact(button.getAttribute('data-id'))
@@ -348,15 +350,19 @@
         fetch('/api/artikel-gebruik/' + id)
             .then(response => response.json())
             .then(data => {
-                articleImpactState.items = data
+                articleImpactState.items = Array.isArray(data) ? data : []
+                articleImpactState.loaded = true
+                document.getElementById('bewerkOpslaan').disabled = false
                 renderArticleImpact()
             })
             .catch(() => {
                 impact.textContent = 'Het wijzigingseffect kon niet worden geladen.'
+                articleImpactState.loaded = false
             })
     }
 
     function confirmArticleImpact() {
+        if (!articleImpactState.loaded) return false
         var newMin = document.getElementById('bewerkKanbanMin').value
         var newRefill = document.getElementById('bewerkKanbanRefill').value
         var changed = newMin !== articleImpactState.originalMin || newRefill !== articleImpactState.originalRefill
@@ -384,15 +390,18 @@
         fetch('/api/artikel-gebruik/' + id)
             .then(response => response.json())
             .then(data => {
-                list.innerHTML = '';
-                if(data.length === 0) list.innerHTML = '<li class="list-group-item text-muted">Ligt in geen enkele kast.</li>';
-                else {
-                    data.forEach(item => {
-                        list.innerHTML += `<li class="list-group-item d-flex justify-content-between">
-                            <span><strong>${item.ruimte}</strong> - ${item.kast}</span>
-                            <span class="badge bg-light text-dark border">${item.materiaaltype === 'STANDAARD' ? 'Standaard' : `Min: ${item.min} / Aanv.: ${item.aanv}`}</span>
+                    list.innerHTML = '';
+                if(data.length === 0) list.innerHTML = '<li class="list-group-item text-muted">Ligt op geen enkele Opslaglocatie.</li>';
+                    else {
+                        data.forEach(item => {
+                            const min = item.min_afwijkend ? `<span class="text-warning fw-semibold" title="Artikel-default">Min: ${item.min} <i class="bi bi-gear-fill small"></i></span>` : `Min: ${item.min}`
+                            const aanv = item.aanv_afwijkend ? `<span class="text-warning fw-semibold" title="Artikel-default">Aanv.: ${item.aanv} <i class="bi bi-gear-fill small"></i></span>` : `Aanv.: ${item.aanv}`
+                            const settings = item.materiaaltype === 'STANDAARD' ? '<span class="text-muted">Standaard</span>' : `${min} / ${aanv}`
+                            list.innerHTML += `<li class="list-group-item d-flex justify-content-between">
+                            <span><strong>${item.ruimte}</strong> - ${item.opslaglocatie}</span>
+                            <span>${settings}</span>
                         </li>`;
-                    });
+                        });
                 }
             });
     }

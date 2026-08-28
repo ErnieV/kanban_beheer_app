@@ -10,7 +10,6 @@ import base64
 import mimetypes
 import threading
 import time
-from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 import requests
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, abort
@@ -100,8 +99,6 @@ class KanbanKaart(db.Model):
     location_text = db.Column(db.String(255), nullable=False)
     product_sku = db.Column(db.String(64), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='PENDING_PRINT')
-    content_min_level = db.Column(db.Integer, nullable=True)
-    content_refill_quantity = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     printed_at = db.Column(db.DateTime, nullable=True)
     cancelled_at = db.Column(db.DateTime, nullable=True)
@@ -148,10 +145,6 @@ def ensure_kanban_settings_schema():
         },
         'Print_Queue': {
             'refill_quantity': 'INTEGER NULL',
-        },
-        'Kanban_Kaart': {
-            'content_min_level': 'INTEGER NULL',
-            'content_refill_quantity': 'INTEGER NULL',
         },
     }
 
@@ -393,37 +386,10 @@ def _position_material_type(position):
     return normalize_material_type(getattr(position, 'materiaaltype', None))
 
 
-def _legacy_position_overrides(position):
-    """Read valid old position values as temporary local effective values."""
-    old_min = getattr(position, 'trigger_min', None)
-    old_target = getattr(position, 'target_max', None)
-    if old_min is None or old_target is None:
-        return None, None
-
-    try:
-        old_min = int(old_min)
-        old_refill = int(old_target) - old_min
-    except (TypeError, ValueError):
-        return None, None
-    if old_min < 0 or old_refill < 1:
-        return None, None
-    return old_min, old_refill
-
-
 def _position_overrides(position, article):
     standard = _article_kanban_standard(article)
-    raw_material_type = getattr(position, 'materiaaltype', None)
     min_override = getattr(position, 'kanban_min_override', None)
     refill_override = getattr(position, 'kanban_refill_quantity_override', None)
-
-    # Existing rows have no new columns yet.  Treat their valid legacy values
-    # as local effective values so the expand step does not change behaviour.
-    if (
-        raw_material_type is None
-        and min_override is None
-        and refill_override is None
-    ):
-        min_override, refill_override = _legacy_position_overrides(position)
 
     return normalized_position_overrides(
         _position_material_type(position),
@@ -577,8 +543,6 @@ def _create_kanban_card(pos, art, kast, ruimte, bedrijf):
         product_name=art.eigen_naam,
         location_text=f"{kast.naam} ({kast.type_opslag})",
         product_sku=str(art.lokaal_artikel_id),
-        content_min_level=effective.min_level,
-        content_refill_quantity=effective.refill_quantity,
         status='PENDING_PRINT',
         created_at=utcnow()
     )
@@ -626,12 +590,11 @@ def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
 
 def _effective_settings_from_standard(position, standard):
     """Resolve a position against an explicitly supplied Article standard."""
-    min_override, refill_override = _position_overrides(
+    min_override = getattr(position, 'kanban_min_override', None)
+    refill_override = getattr(
         position,
-        SimpleNamespace(
-            kanban_min=standard.min_level,
-            kanban_refill_quantity=standard.refill_quantity,
-        ),
+        'kanban_refill_quantity_override',
+        None,
     )
     return effective_kanban_settings(
         _position_material_type(position),
@@ -703,7 +666,7 @@ def _get_queue_card(queue_item):
 
 def _mark_card_printed(queue_item):
     card = _get_queue_card(queue_item)
-    if not card:
+    if not card or getattr(card, 'status', None) == 'SUPERSEDED':
         return
     card.status = 'PRINTED'
     card.printed_at = utcnow()
@@ -780,7 +743,18 @@ def _queue_item_effective_settings(queue_item):
 app.jinja_env.globals['effective_queue_settings'] = _queue_item_effective_settings
 
 
+def _queue_item_is_superseded(queue_item):
+    card = _get_queue_card(queue_item)
+    return bool(card and getattr(card, 'status', None) == 'SUPERSEDED')
+
+
+app.jinja_env.globals['queue_item_is_superseded'] = _queue_item_is_superseded
+
+
 def _build_print_payload(queue_item):
+    if _queue_item_is_superseded(queue_item):
+        return None, "Deze Kanban-kaart is verouderd; vraag een nieuwe kaart aan."
+
     product = {
         "name": queue_item.product_name or "",
         "packaging": queue_item.product_packaging or "Stuk",
@@ -1417,7 +1391,8 @@ def _get_open_scan_rows(bedrijf_id):
         Bedrijf, KanbanKaart.bedrijf_id == Bedrijf.bedrijf_id
     ).filter(
         KanbanScanlijstItem.bedrijf_id == bedrijf_id,
-        KanbanScanlijstItem.reset_at.is_(None)
+        KanbanScanlijstItem.reset_at.is_(None),
+        KanbanKaart.status != 'SUPERSEDED',
     ).order_by(KanbanScanlijstItem.last_scanned_at.desc()).all()
 
 
@@ -1854,10 +1829,12 @@ def api_artikel_gebruik(artikel_id):
         display = kanban_display_values(position, artikel)
         usage.append({
             'ruimte': room.naam,
-            'kast': storage_location.naam,
+            'opslaglocatie': storage_location.naam,
             'materiaaltype': display['materiaaltype'],
             'min': display['min_level'],
             'aanv': display['refill_quantity'],
+            'min_afwijkend': display['min_is_override'],
+            'aanv_afwijkend': display['refill_is_override'],
             'erft_standaard': (
                 display['materiaaltype'] == Materiaaltype.KANBAN.value
                 and not display['min_is_override']

@@ -61,6 +61,7 @@
                 <tbody>
                     {% for item in queue_items %}
                     {% set effectieve_kanban = effective_queue_settings(item) %}
+                    {% set kaart_verouderd = queue_item_is_superseded(item) %}
                     <tr>
                         <!-- HEADER INFO & LOGO -->
                         <td>
@@ -103,9 +104,12 @@
                         <!-- LOGISTIEK -->
                         <td>
                             <div class="d-flex flex-column gap-1">
-                                {% if effectieve_kanban %}
-                                    <span class="badge bg-light text-dark border">Min: {{ effectieve_kanban.min_level }}</span>
-                                    <span class="badge bg-light text-dark border">Aanv.: {{ effectieve_kanban.refill_quantity }}</span>
+                                {% if kaart_verouderd %}
+                                    <span class="text-danger">Kaart verouderd</span>
+                                    <span class="small text-muted">Vraag een nieuwe kaart aan.</span>
+                                {% elif effectieve_kanban %}
+                                    <span>Min: {{ effectieve_kanban.min_level }}</span>
+                                    <span>Aanv.: {{ effectieve_kanban.refill_quantity }}</span>
                                 {% else %}
                                     <span class="text-muted">Geen Kanban-instelling</span>
                                 {% endif %}
@@ -138,7 +142,7 @@
                             <div class="btn-group-vertical btn-group-sm w-100">
                                 <form action="{{ url_for('verstuur_print_opdracht', print_id=item.print_id) }}" method="POST" class="mb-1">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="btn btn-success w-100" title="Stuur direct naar lokale printer">
+                                    <button type="submit" class="btn btn-success w-100" title="Stuur direct naar lokale printer" {% if kaart_verouderd %}disabled{% endif %}>
                                         <i class="bi bi-send"></i> Print
                                     </button>
                                 </form>

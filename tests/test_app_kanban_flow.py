@@ -238,7 +238,7 @@ def test_new_position_uses_the_current_article_standard_after_a_change(
     ) == KanbanStandard(3, 4)
 
 
-def test_existing_legacy_position_keeps_its_effective_values_during_expand(
+def test_existing_legacy_position_inherits_current_article_standard_after_cutover(
     app_module,
 ):
     position = SimpleNamespace(
@@ -253,7 +253,7 @@ def test_existing_legacy_position_keeps_its_effective_values_during_expand(
     assert app_module.effective_position_kanban_settings(
         position,
         article,
-    ) == KanbanStandard(2, 3)
+    ) == KanbanStandard(1, 1)
 
 
 def test_expand_schema_adds_new_nullable_columns_without_rewriting_legacy_data(
@@ -288,10 +288,6 @@ def test_expand_schema_adds_new_nullable_columns_without_rewriting_legacy_data(
             column["name"]
             for column in inspector.get_columns("Print_Queue")
         }
-        card_columns = {
-            column["name"]
-            for column in inspector.get_columns("Kanban_Kaart")
-        }
 
     assert {"kanban_min", "kanban_refill_quantity"} <= article_columns
     assert {
@@ -300,10 +296,6 @@ def test_expand_schema_adds_new_nullable_columns_without_rewriting_legacy_data(
         "kanban_refill_quantity_override",
     } <= position_columns
     assert "refill_quantity" in queue_columns
-    assert {
-        "content_min_level",
-        "content_refill_quantity",
-    } <= card_columns
 
 
 def test_position_switch_to_standard_clears_all_kanban_values(app_module, monkeypatch):
@@ -637,6 +629,40 @@ def test_print_service_payload_uses_refill_quantity_without_max_level(
     logistics = captured["payload"]["data"]["logistics"]
     assert logistics == {"location": "Kast A", "minLevel": 3, "refillQuantity": 4}
     assert "maxLevel" not in str(captured["payload"])
+
+
+def test_superseded_queue_item_is_not_sent_to_print_service(
+    app_module, monkeypatch
+):
+    card = SimpleNamespace(status="SUPERSEDED")
+
+    class CardQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return card
+
+    class FakeSession:
+        def query(self, *models):
+            return CardQuery()
+
+    queue_item = SimpleNamespace(kaart_id="kaart-7")
+    post_called = []
+
+    monkeypatch.setattr(app_module, "PRINT_SERVICE_URL", "http://print.test")
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+    monkeypatch.setattr(
+        app_module.requests,
+        "post",
+        lambda *args, **kwargs: post_called.append(True),
+    )
+
+    sent, error = app_module.send_queue_item_to_print_service(queue_item)
+
+    assert sent is False
+    assert "verouderd" in error
+    assert post_called == []
 
 
 def test_print_queue_view_uses_effective_min_and_refill_without_max(

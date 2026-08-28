@@ -1,5 +1,6 @@
 <!-- Bestand: templates/kast_inhoud.html -->
 {% extends "base.html" %}
+{% from "_kanban_values.html" import render_kanban_values %}
 {% block content %}
 <div class="mb-4">
     <a href="{{ url_for('kast_selectie') }}" class="text-decoration-none text-muted fw-medium d-inline-flex align-items-center hover-primary">
@@ -77,8 +78,7 @@
                     <thead class="bg-light">
                         <tr>
                             <th class="ps-4 text-secondary text-uppercase small fw-bold">Artikel & Locatie</th>
-                            <th class="text-center text-secondary text-uppercase small fw-bold">Min</th>
-                            <th class="text-center text-secondary text-uppercase small fw-bold">Aanv.</th>
+                            <th class="text-center text-secondary text-uppercase small fw-bold" colspan="2">Kanban</th>
                             <th class="text-end pe-4 text-secondary text-uppercase small fw-bold">Status</th>
                         </tr>
                     </thead>
@@ -110,20 +110,7 @@
                                     </div>
                                 </div>
                             </td>
-                            <td class="text-center">
-                                {% if kanban.min_level is not none %}
-                                    <span class="badge bg-warning text-warning bg-opacity-10 border border-warning border-opacity-25 px-3 rounded-pill">{{ kanban.min_level }}</span>
-                                {% else %}
-                                    <span class="text-muted">—</span>
-                                {% endif %}
-                            </td>
-                            <td class="text-center">
-                                {% if kanban.refill_quantity is not none %}
-                                    <span class="badge bg-success text-success bg-opacity-10 border border-success border-opacity-25 px-3 rounded-pill">{{ kanban.refill_quantity }}</span>
-                                {% else %}
-                                    <span class="text-muted">—</span>
-                                {% endif %}
-                            </td>
+                            <td class="text-center" colspan="2">{{ render_kanban_values(kanban) }}</td>
                             <td class="text-end pe-4">
                                 <button class="btn btn-icon btn-sm btn-light text-muted" title="Opties">
                                     <i class="bi bi-three-dots-vertical"></i>

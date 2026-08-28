@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_kanban_values.html" import render_kanban_values %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -77,14 +78,7 @@
                                                 </div>
                                             </div>
                                         </td>
-                                        <td>
-                                            {% if kanban.min_level is not none %}
-                                                <span class="badge bg-light text-dark border">Min {{ kanban.min_level }}</span>
-                                                <span class="badge bg-light text-dark border">Aanv. {{ kanban.refill_quantity }}</span>
-                                            {% else %}
-                                                <span class="text-muted">Standaard</span>
-                                            {% endif %}
-                                        </td>
+                                        <td>{{ render_kanban_values(kanban, compact=true) }}</td>
                                         <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
                                         <td><span class="font-monospace">{{ (globaal.sku if globaal and globaal.sku else artikel.lokaal_artikel_id) if artikel else '-' }}</span></td>
                                     </tr>
