@@ -28,6 +28,9 @@
 
 <form method="POST" action="{{ url_for('ruimte_print_selectie', ruimte_id=ruimte.ruimte_id, kaart_type=kaart_type) }}" id="printSelectionForm">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    {% if kaart_type == 'locatie' %}
+    <input type="hidden" name="printBatchId" value="{{ print_batch_id or '' }}">
+    {% endif %}
     <div class="card shadow-sm border-0 mb-4">
         <div class="list-group list-group-flush">
             {% for item in selection_items %}

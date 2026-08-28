@@ -537,6 +537,11 @@ def test_location_print_selection_creates_only_selected_location_versions(
     )
     row = (position, article, None, kast, room, room_type, company)
     created_rows = []
+    version = SimpleNamespace(
+        status="PENDING_PRINT",
+        printed_at=None,
+        cancelled_at=None,
+    )
 
     class FakeQuery:
         def all(self):
@@ -556,7 +561,22 @@ def test_location_print_selection_creates_only_selected_location_versions(
     monkeypatch.setattr(
         app_module,
         "create_or_reuse_locatiekaart_version",
-        lambda *source_row: created_rows.append(source_row) or ("version", True),
+        lambda *source_row: created_rows.append(source_row) or (version, True),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda versions, print_batch_id: (
+            True,
+            None,
+            {
+                "printBatchId": print_batch_id,
+                "jobId": "job-1",
+                "status": "ACCEPTED",
+                "cardCount": len(versions),
+                "sheetCount": 1,
+            },
+        ),
     )
     monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
 
@@ -565,11 +585,13 @@ def test_location_print_selection_creates_only_selected_location_versions(
         data={
             "_csrf_token": "test-csrf",
             "position_ids": ["13"],
+            "printBatchId": "batch-1",
         },
     )
 
     assert response.status_code == 302
     assert [source_row[0].voorraad_positie_id for source_row in created_rows] == [13]
+    assert version.status == "PRINTED"
 
 
 def test_empty_storage_location_print_selection_has_no_side_effect(
@@ -775,6 +797,15 @@ def test_room_location_print_selection_processes_selected_standard_and_kanban(
 ):
     room, rows = _room_print_rows()
     created_rows = []
+    versions = {
+        row[0].voorraad_positie_id: SimpleNamespace(
+            status="PENDING_PRINT",
+            printed_at=None,
+            cancelled_at=None,
+        )
+        for row in rows
+    }
+    sent = []
 
     class FakeQuery:
         def all(self):
@@ -794,7 +825,27 @@ def test_room_location_print_selection_processes_selected_standard_and_kanban(
     monkeypatch.setattr(
         app_module,
         "create_or_reuse_locatiekaart_version",
-        lambda *row: created_rows.append(row) or ("version", True),
+        lambda *row: created_rows.append(row) or (
+            versions[row[0].voorraad_positie_id],
+            True,
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda selected_versions, print_batch_id: sent.append(
+            (selected_versions, print_batch_id)
+        ) or (
+            True,
+            None,
+            {
+                "printBatchId": print_batch_id,
+                "jobId": "job-2",
+                "status": "ACCEPTED",
+                "cardCount": len(selected_versions),
+                "sheetCount": 1,
+            }
+        ),
     )
     monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
 
@@ -808,6 +859,12 @@ def test_room_location_print_selection_processes_selected_standard_and_kanban(
 
     assert response.status_code == 302
     assert [row[0].voorraad_positie_id for row in created_rows] == [103, 101]
+    assert [version.status for version in versions.values() if version.printed_at] == [
+        "PRINTED",
+        "PRINTED",
+    ]
+    assert len(sent) == 1
+    assert sent[0][1]
 
 
 def test_empty_room_print_selection_has_no_side_effect(
@@ -927,6 +984,171 @@ def test_room_page_exposes_independent_print_actions_with_counts(
     assert "Locatiekaartjes (2)" in html
     assert "/assistent/kamer/9/print/kanban" in html
     assert "/assistent/kamer/9/print/locatie" in html
+
+
+def test_storage_location_location_print_marks_versions_printed_after_acceptance(
+    app_module,
+    monkeypatch,
+):
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
+    room = SimpleNamespace(naam="Behandelkamer", nummer=None)
+    room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
+    company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    position = SimpleNamespace(
+        voorraad_positie_id=13,
+        lokaal_artikel_id=8,
+        materiaaltype="STANDAARD",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url=None,
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=8,
+        eigen_naam="Naaldencontainer",
+        foto_url="standard.png",
+        verpakkingseenheid_tekst="stuk",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    row = (position, article, None, kast, room, room_type, company)
+    version = SimpleNamespace(
+        status="PENDING_PRINT",
+        printed_at=None,
+        cancelled_at=None,
+    )
+    created = []
+    sent = []
+    commits = []
+
+    class FakeQuery:
+        def all(self):
+            return [row]
+
+    class FakeSession:
+        def commit(self):
+            commits.append(True)
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(
+        app_module,
+        "create_or_reuse_locatiekaart_version",
+        lambda *source_row: created.append(source_row) or (version, True),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda versions, print_batch_id: sent.append((versions, print_batch_id))
+        or (
+            True,
+            None,
+            {
+                "printBatchId": print_batch_id,
+                "jobId": "job-1",
+                "status": "ACCEPTED",
+                "cardCount": 1,
+                "sheetCount": 1,
+            }
+        ),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kast/4/print/locatie",
+        data={
+            "_csrf_token": "test-csrf",
+            "position_ids": ["13"],
+            "printBatchId": "batch-1",
+        },
+    )
+
+    assert response.status_code == 302
+    assert [source_row[0].voorraad_positie_id for source_row in created] == [13]
+    assert sent == [([version], "batch-1")]
+    assert version.status == "PRINTED"
+    assert version.printed_at is not None
+    assert len(commits) == 2
+
+
+def test_storage_location_location_print_keeps_pending_on_service_failure(
+    app_module,
+    monkeypatch,
+):
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
+    room = SimpleNamespace(naam="Behandelkamer", nummer=None)
+    room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
+    company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    position = SimpleNamespace(
+        voorraad_positie_id=13,
+        lokaal_artikel_id=8,
+        materiaaltype="STANDAARD",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url=None,
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=8,
+        eigen_naam="Naaldencontainer",
+        foto_url="standard.png",
+        verpakkingseenheid_tekst="stuk",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    row = (position, article, None, kast, room, room_type, company)
+    version = SimpleNamespace(
+        status="PENDING_PRINT",
+        printed_at=None,
+        cancelled_at=None,
+    )
+    commits = []
+
+    class FakeQuery:
+        def all(self):
+            return [row]
+
+    class FakeSession:
+        def commit(self):
+            commits.append(True)
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(
+        app_module,
+        "create_or_reuse_locatiekaart_version",
+        lambda *source_row: (version, True),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda versions, print_batch_id: (False, "A4-service offline", None),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kast/4/print/locatie",
+        data={
+            "_csrf_token": "test-csrf",
+            "position_ids": ["13"],
+            "printBatchId": "retry-batch",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "A4-service offline" in html
+    assert version.status == "PENDING_PRINT"
+    assert 'name="printBatchId" value="retry-batch"' in html
+    assert len(commits) == 1
 
 
 class _CatalogQuery:

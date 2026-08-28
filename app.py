@@ -2039,6 +2039,7 @@ def kast_print_selectie(kast_id, kaart_type):
     applicable_items = [item for item in selection_items if item['applicable']]
     valid_items = [item for item in applicable_items if item['valid']]
     selected_ids = None
+    print_batch_id = request.form.get('printBatchId', '') if request.method == 'POST' else ''
 
     if request.method == 'POST':
         selected_ids = {
@@ -2061,24 +2062,58 @@ def kast_print_selectie(kast_id, kaart_type):
                 applicable_count=len(applicable_items),
                 valid_count=len(valid_items),
                 selected_ids=set(),
+                print_batch_id=print_batch_id,
             )
 
         try:
+            if kaart_type == 'kanban':
+                for item in selected_items:
+                    row = rows_by_position_id[item['position_id']]
+                    db.session.add(create_queue_item(*row))
+                db.session.commit()
+                flash(
+                    f'{len(selected_items)} Kanban-kaartje'
+                    f'{"s" if len(selected_items) != 1 else ""} aangevraagd.',
+                    'success',
+                )
+                return redirect(url_for('assistent_kast_inhoud', kast_id=kast_id))
+
+            location_versions = []
             for item in selected_items:
                 row = rows_by_position_id[item['position_id']]
-                if kaart_type == 'kanban':
-                    db.session.add(create_queue_item(*row))
-                else:
-                    create_or_reuse_locatiekaart_version(*row)
+                version, _ = create_or_reuse_locatiekaart_version(*row)
+                location_versions.append(version)
+
+            # Persist pending versions before calling the external service so a
+            # failed request can be retried without losing the snapshot.
             db.session.commit()
-            kaartje_label = (
-                'Kanban-kaartje'
-                if kaart_type == 'kanban'
-                else 'Locatiekaartje'
+            if not print_batch_id:
+                print_batch_id = str(uuid.uuid4())
+            sent, error, metadata = send_location_cards_to_print_service(
+                location_versions,
+                print_batch_id,
             )
-            kaartje_meervoud = 's' if len(selected_items) != 1 else ''
+            if not sent:
+                flash(f'A4-printaanvraag mislukt: {error}', 'danger')
+                return render_template(
+                    'kast_print_selectie.html',
+                    kast=kast,
+                    kaart_type=kaart_type,
+                    kaart_type_label=kaart_type_label,
+                    selection_items=selection_items,
+                    applicable_count=len(applicable_items),
+                    valid_count=len(valid_items),
+                    selected_ids=selected_ids,
+                    print_batch_id=print_batch_id,
+                )
+
+            for version in location_versions:
+                mark_locatiekaart_version_printed(version)
+            db.session.commit()
             flash(
-                f'{len(selected_items)} {kaartje_label}{kaartje_meervoud} aangevraagd.',
+                f'A4-printbatch {metadata["printBatchId"]} geaccepteerd: '
+                f'{metadata["cardCount"]} kaartje(s), '
+                f'{metadata["sheetCount"]} vel(len), job {metadata["jobId"]}.',
                 'success',
             )
             return redirect(url_for('assistent_kast_inhoud', kast_id=kast_id))
@@ -2100,6 +2135,7 @@ def kast_print_selectie(kast_id, kaart_type):
         applicable_count=len(applicable_items),
         valid_count=len(valid_items),
         selected_ids=selected_ids,
+        print_batch_id=print_batch_id,
     )
 
 
@@ -2126,6 +2162,7 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
     applicable_items = [item for item in selection_items if item['applicable']]
     valid_items = [item for item in applicable_items if item['valid']]
     selected_ids = None
+    print_batch_id = request.form.get('printBatchId', '') if request.method == 'POST' else ''
 
     if request.method == 'POST':
         selected_ids = {
@@ -2148,20 +2185,57 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
                 applicable_count=len(applicable_items),
                 valid_count=len(valid_items),
                 selected_ids=set(),
+                print_batch_id=print_batch_id,
             )
 
         try:
+            if kaart_type == 'kanban':
+                for item in selected_items:
+                    row = rows_by_position_id[item['position_id']]
+                    db.session.add(create_queue_item(*row))
+                db.session.commit()
+                kaartje_label = _print_selection_label(kaart_type, singular=True)
+                kaartje_meervoud = 's' if len(selected_items) != 1 else ''
+                flash(
+                    f'{len(selected_items)} {kaartje_label}{kaartje_meervoud} aangevraagd.',
+                    'success',
+                )
+                return redirect(url_for('assistent_kamer_view', ruimte_id=ruimte_id))
+
+            location_versions = []
             for item in selected_items:
                 row = rows_by_position_id[item['position_id']]
-                if kaart_type == 'kanban':
-                    db.session.add(create_queue_item(*row))
-                else:
-                    create_or_reuse_locatiekaart_version(*row)
+                version, _ = create_or_reuse_locatiekaart_version(*row)
+                location_versions.append(version)
+
             db.session.commit()
-            kaartje_label = _print_selection_label(kaart_type, singular=True)
-            kaartje_meervoud = 's' if len(selected_items) != 1 else ''
+            if not print_batch_id:
+                print_batch_id = str(uuid.uuid4())
+            sent, error, metadata = send_location_cards_to_print_service(
+                location_versions,
+                print_batch_id,
+            )
+            if not sent:
+                flash(f'A4-printaanvraag mislukt: {error}', 'danger')
+                return render_template(
+                    'kamer_print_selectie.html',
+                    ruimte=ruimte,
+                    kaart_type=kaart_type,
+                    kaart_type_label=_print_selection_label(kaart_type),
+                    selection_items=selection_items,
+                    applicable_count=len(applicable_items),
+                    valid_count=len(valid_items),
+                    selected_ids=selected_ids,
+                    print_batch_id=print_batch_id,
+                )
+
+            for version in location_versions:
+                mark_locatiekaart_version_printed(version)
+            db.session.commit()
             flash(
-                f'{len(selected_items)} {kaartje_label}{kaartje_meervoud} aangevraagd.',
+                f'A4-printbatch {metadata["printBatchId"]} geaccepteerd: '
+                f'{metadata["cardCount"]} kaartje(s), '
+                f'{metadata["sheetCount"]} vel(len), job {metadata["jobId"]}.',
                 'success',
             )
             return redirect(url_for('assistent_kamer_view', ruimte_id=ruimte_id))
@@ -2183,6 +2257,7 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
         applicable_count=len(applicable_items),
         valid_count=len(valid_items),
         selected_ids=selected_ids,
+        print_batch_id=print_batch_id,
     )
 
 
