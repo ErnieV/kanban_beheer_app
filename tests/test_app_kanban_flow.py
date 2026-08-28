@@ -253,7 +253,7 @@ def test_existing_legacy_position_inherits_current_article_standard_after_cutove
     assert app_module.effective_position_kanban_settings(
         position,
         article,
-    ) == KanbanStandard(1, 1)
+    ) == KanbanStandard(2, 3)
 
 
 def test_expand_schema_adds_new_nullable_columns_without_rewriting_legacy_data(
@@ -731,8 +731,8 @@ def test_print_queue_view_uses_effective_min_and_refill_without_max(
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert "Min: 3" in html
-    assert "Aanv.: 4" in html
+    assert "Min 3" in html
+    assert "Aanv. 4" in html
     assert "Max" not in html
 
 

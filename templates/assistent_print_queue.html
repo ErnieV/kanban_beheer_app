@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_kanban_values.html" import render_kanban_values %}
 {% block content %}
 <div class="mb-4">
     <a href="{{ url_for('dashboard') }}" class="text-decoration-none text-muted">
@@ -60,7 +61,7 @@
                 </thead>
                 <tbody>
                     {% for item in queue_items %}
-                    {% set effectieve_kanban = effective_queue_settings(item) %}
+                    {% set effectieve_kanban = queue_display_values(item) %}
                     {% set kaart_verouderd = queue_item_is_superseded(item) %}
                     <tr>
                         <!-- HEADER INFO & LOGO -->
@@ -107,9 +108,8 @@
                                 {% if kaart_verouderd %}
                                     <span class="text-danger">Kaart verouderd</span>
                                     <span class="small text-muted">Vraag een nieuwe kaart aan.</span>
-                                {% elif effectieve_kanban %}
-                                    <span>Min: {{ effectieve_kanban.min_level }}</span>
-                                    <span>Aanv.: {{ effectieve_kanban.refill_quantity }}</span>
+                                {% elif effectieve_kanban.min_level is not none %}
+                                    {{ render_kanban_values(effectieve_kanban, compact=true) }}
                                 {% else %}
                                     <span class="text-muted">Geen Kanban-instelling</span>
                                 {% endif %}
@@ -160,8 +160,8 @@
                                         data-img="{{ item.product_image_url }}"
                                         data-logo="{{ item.company_logo_url }}"
                                         data-location="{{ item.location_text }}"
-                                        data-min="{{ effectieve_kanban.min_level if effectieve_kanban else '' }}"
-                                        data-refill="{{ effectieve_kanban.refill_quantity if effectieve_kanban else '' }}"
+                                        data-min="{{ effectieve_kanban.min_level if effectieve_kanban.min_level is not none else '' }}"
+                                        data-refill="{{ effectieve_kanban.refill_quantity if effectieve_kanban.refill_quantity is not none else '' }}"
                                         data-qr="{{ item.qr_code_value }}"
                                         data-human="{{ item.qr_human_readable }}">
                                     <i class="bi bi-eye"></i> Voorbeeld

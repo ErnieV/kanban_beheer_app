@@ -386,16 +386,50 @@ def _position_material_type(position):
     return normalize_material_type(getattr(position, 'materiaaltype', None))
 
 
-def _position_overrides(position, article):
-    standard = _article_kanban_standard(article)
+def _legacy_position_overrides(position):
+    """Read valid old position values until the Max migration is complete."""
+    old_min = getattr(position, 'trigger_min', None)
+    old_target = getattr(position, 'target_max', None)
+    if old_min is None or old_target is None:
+        return None, None
+
+    try:
+        old_min = int(old_min)
+        old_refill = int(old_target) - old_min
+    except (TypeError, ValueError):
+        return None, None
+    if old_min < 0 or old_refill < 1:
+        return None, None
+    return old_min, old_refill
+
+
+def _normalized_position_overrides_for_standard(position, standard):
+    raw_material_type = getattr(position, 'materiaaltype', None)
     min_override = getattr(position, 'kanban_min_override', None)
     refill_override = getattr(position, 'kanban_refill_quantity_override', None)
+
+    # Rows from before the expand step have no material type or new override
+    # fields. Preserve their effective legacy values until ticket #10 migrates
+    # them into explicit Article standards and position deviations.
+    if (
+        raw_material_type is None
+        and min_override is None
+        and refill_override is None
+    ):
+        min_override, refill_override = _legacy_position_overrides(position)
 
     return normalized_position_overrides(
         _position_material_type(position),
         standard,
         min_override,
         refill_override,
+    )
+
+
+def _position_overrides(position, article):
+    return _normalized_position_overrides_for_standard(
+        position,
+        _article_kanban_standard(article),
     )
 
 
@@ -524,12 +558,12 @@ app.jinja_env.globals['position_kanban_override_values'] = (
 app.jinja_env.globals['kanban_display_values'] = kanban_display_values
 
 
-def _create_kanban_card(pos, art, kast, ruimte, bedrijf):
+def _create_kanban_card(pos, art, kast, ruimte, bedrijf, effective=None):
     human_code = _generate_human_code()
     while db.session.query(KanbanKaart).filter(KanbanKaart.human_code == human_code).first():
         human_code = _generate_human_code()
 
-    effective = effective_position_kanban_settings(pos, art)
+    effective = effective or effective_position_kanban_settings(pos, art)
     if effective is None:
         raise KanbanSettingsError(
             'Standaard materiaal kan geen Kanban-kaart aanvragen.'
@@ -558,7 +592,14 @@ def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
         raise KanbanSettingsError(
             'Standaard materiaal kan geen Kanban-kaart aanvragen.'
         )
-    card = _create_kanban_card(pos, art, kast, ruimte, bedrijf)
+    card = _create_kanban_card(
+        pos,
+        art,
+        kast,
+        ruimte,
+        bedrijf,
+        effective=effective,
+    )
 
     queue_kwargs = dict(
         bedrijf_id=bedrijf.bedrijf_id,
@@ -582,19 +623,15 @@ def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
         queue_kwargs['kaart_id'] = card.kaart_id
     if not hasattr(Print_Queue, 'refill_quantity'):
         queue_kwargs.pop('refill_quantity', None)
-    if not hasattr(Print_Queue, 'max_level'):
-        queue_kwargs.pop('max_level', None)
 
     return Print_Queue(**queue_kwargs)
 
 
 def _effective_settings_from_standard(position, standard):
     """Resolve a position against an explicitly supplied Article standard."""
-    min_override = getattr(position, 'kanban_min_override', None)
-    refill_override = getattr(
+    min_override, refill_override = _normalized_position_overrides_for_standard(
         position,
-        'kanban_refill_quantity_override',
-        None,
+        standard,
     )
     return effective_kanban_settings(
         _position_material_type(position),
@@ -602,6 +639,12 @@ def _effective_settings_from_standard(position, standard):
         min_override,
         refill_override,
     )
+
+
+def _mark_cards_superseded(cards):
+    for card in cards:
+        if getattr(card, 'status', None) in {'PENDING_PRINT', 'PRINTED'}:
+            card.status = 'SUPERSEDED'
 
 
 def _supersede_cards_for_article(article_id, old_standard, new_standard):
@@ -621,6 +664,7 @@ def _supersede_cards_for_article(article_id, old_standard, new_standard):
     except (AttributeError, TypeError):
         return
 
+    cards_to_supersede = []
     for card, position in rows:
         old_effective = _effective_settings_from_standard(
             position,
@@ -630,11 +674,9 @@ def _supersede_cards_for_article(article_id, old_standard, new_standard):
             position,
             new_standard,
         )
-        if old_effective != new_effective and getattr(card, 'status', None) in {
-            'PENDING_PRINT',
-            'PRINTED',
-        }:
-            card.status = 'SUPERSEDED'
+        if old_effective != new_effective:
+            cards_to_supersede.append(card)
+    _mark_cards_superseded(cards_to_supersede)
 
 
 def _supersede_cards_for_position(position, old_effective, new_effective):
@@ -652,9 +694,7 @@ def _supersede_cards_for_position(position, old_effective, new_effective):
     except (AttributeError, TypeError):
         return
 
-    for card in cards:
-        if getattr(card, 'status', None) in {'PENDING_PRINT', 'PRINTED'}:
-            card.status = 'SUPERSEDED'
+    _mark_cards_superseded(cards)
 
 
 def _get_queue_card(queue_item):
@@ -702,8 +742,7 @@ def _image_to_base64_object(image_source, label):
     return {"base64Data": f"data:{content_type};base64,{encoded}"}, None
 
 
-def _queue_item_effective_settings(queue_item):
-    """Resolve current effective settings, with a legacy queue fallback."""
+def _queue_item_source(queue_item):
     kaart_id = getattr(queue_item, 'kaart_id', None)
     query = getattr(db.session, 'query', None)
     if kaart_id and query and Voorraad_Positie and Lokaal_Artikel:
@@ -720,9 +759,18 @@ def _queue_item_effective_settings(queue_item):
                 == position.lokaal_artikel_id,
             ).first() if position else None
             if position and article:
-                return effective_position_kanban_settings(position, article)
+                return position, article
         except (AttributeError, TypeError):
             pass
+
+    return None, None
+
+
+def _queue_item_effective_settings(queue_item):
+    """Resolve current effective settings, with a legacy queue fallback."""
+    position, article = _queue_item_source(queue_item)
+    if position and article:
+        return effective_position_kanban_settings(position, article)
 
     min_level = getattr(queue_item, 'min_level', None)
     refill_quantity = getattr(queue_item, 'refill_quantity', None)
@@ -740,7 +788,33 @@ def _queue_item_effective_settings(queue_item):
         return None
 
 
+def _queue_item_display_values(queue_item):
+    position, article = _queue_item_source(queue_item)
+    if position and article:
+        return kanban_display_values(position, article)
+
+    effective = _queue_item_effective_settings(queue_item)
+    if not effective:
+        return {
+            'materiaaltype': Materiaaltype.KANBAN.value,
+            'min_level': None,
+            'refill_quantity': None,
+            'min_is_override': False,
+            'refill_is_override': False,
+        }
+    return {
+        'materiaaltype': Materiaaltype.KANBAN.value,
+        'min_level': effective.min_level,
+        'refill_quantity': effective.refill_quantity,
+        'min_is_override': False,
+        'refill_is_override': False,
+        'standard_min_level': effective.min_level,
+        'standard_refill_quantity': effective.refill_quantity,
+    }
+
+
 app.jinja_env.globals['effective_queue_settings'] = _queue_item_effective_settings
+app.jinja_env.globals['queue_display_values'] = _queue_item_display_values
 
 
 def _queue_item_is_superseded(queue_item):
@@ -1825,6 +1899,7 @@ def api_artikel_gebruik(artikel_id):
             Voorraad_Positie.bedrijf_id == bedrijf_id
         ).all()
     usage = []
+    standard = _article_kanban_standard(artikel)
     for position, storage_location, room in posities:
         display = kanban_display_values(position, artikel)
         usage.append({
@@ -1835,6 +1910,8 @@ def api_artikel_gebruik(artikel_id):
             'aanv': display['refill_quantity'],
             'min_afwijkend': display['min_is_override'],
             'aanv_afwijkend': display['refill_is_override'],
+            'standaard_min': standard.min_level,
+            'standaard_aanv': standard.refill_quantity,
             'erft_standaard': (
                 display['materiaaltype'] == Materiaaltype.KANBAN.value
                 and not display['min_is_override']

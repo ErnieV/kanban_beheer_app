@@ -394,8 +394,8 @@
                 if(data.length === 0) list.innerHTML = '<li class="list-group-item text-muted">Ligt op geen enkele Opslaglocatie.</li>';
                     else {
                         data.forEach(item => {
-                            const min = item.min_afwijkend ? `<span class="text-warning fw-semibold" title="Artikel-default">Min: ${item.min} <i class="bi bi-gear-fill small"></i></span>` : `Min: ${item.min}`
-                            const aanv = item.aanv_afwijkend ? `<span class="text-warning fw-semibold" title="Artikel-default">Aanv.: ${item.aanv} <i class="bi bi-gear-fill small"></i></span>` : `Aanv.: ${item.aanv}`
+                            const min = item.min_afwijkend ? `<span class="text-warning fw-semibold" title="Artikel-default: ${item.standaard_min}">Min: ${item.min} <i class="bi bi-gear-fill small" aria-label="Lokale afwijking"></i></span>` : `Min: ${item.min}`
+                            const aanv = item.aanv_afwijkend ? `<span class="text-warning fw-semibold" title="Artikel-default: ${item.standaard_aanv}">Aanv.: ${item.aanv} <i class="bi bi-gear-fill small" aria-label="Lokale afwijking"></i></span>` : `Aanv.: ${item.aanv}`
                             const settings = item.materiaaltype === 'STANDAARD' ? '<span class="text-muted">Standaard</span>' : `${min} / ${aanv}`
                             list.innerHTML += `<li class="list-group-item d-flex justify-content-between">
                             <span><strong>${item.ruimte}</strong> - ${item.opslaglocatie}</span>
