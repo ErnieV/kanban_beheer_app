@@ -65,6 +65,12 @@ PRINT_SERVICE_API_KEY = os.environ.get('PRINT_SERVICE_API_KEY')
 PRINT_SERVICE_REQUIRE_API_KEY = os.environ.get('PRINT_SERVICE_REQUIRE_API_KEY', '1') == '1'
 PRINT_CONNECT_TIMEOUT = float(os.environ.get('PRINT_CONNECT_TIMEOUT', '3'))
 PRINT_REQUEST_TIMEOUT = float(os.environ.get('PRINT_REQUEST_TIMEOUT', '10'))
+LOCATION_CARDS_PRINTER_ID = os.environ.get(
+    'LOCATION_CARDS_PRINTER_ID',
+    'location-cards-a4-01',
+)
+LOCATION_CARDS_PRINT_ENDPOINT = '/api/v1/print-location-cards'
+LOCATION_CARDS_CARD_TYPE = 'LOCATION_A4_DUPLEX'
 KANBAN_SCAN_BASE_URL = os.environ.get('KANBAN_SCAN_BASE_URL', default_scan_base_url)
 APP_VERSION = os.environ.get('APP_VERSION', 'dev')
 APP_BUILD_DATETIME = os.environ.get(
@@ -1387,6 +1393,192 @@ def send_queue_item_to_print_service(queue_item, source_map=None):
         return True, None
     except requests.RequestException as exc:
         return False, f"Printservice fout: {exc}"
+
+
+def build_location_cards_payload(versions, print_batch_id=None):
+    """Build the stable, printer-independent A4 Locatiekaart contract."""
+    versions = list(versions or [])
+    if not versions:
+        raise ValueError("Een Locatiekaartbatch moet minimaal één kaart bevatten.")
+
+    if print_batch_id is None:
+        print_batch_id = str(uuid.uuid4())
+    else:
+        print_batch_id = str(print_batch_id).strip()
+        if not print_batch_id:
+            raise ValueError("printBatchId mag niet leeg zijn.")
+
+    cards = []
+    for version in versions:
+        status = getattr(version, 'status', LocatiekaartStatus.PENDING_PRINT.value)
+        if status in {
+            LocatiekaartStatus.CANCELLED.value,
+            LocatiekaartStatus.SUPERSEDED.value,
+        }:
+            raise ValueError(
+                f"Locatiekaartversie {getattr(version, 'locatiekaart_versie_id', '?')} "
+                "is niet meer printbaar."
+            )
+
+        article_name = (getattr(version, 'artikelnaam', None) or '').strip()
+        if not article_name:
+            raise ValueError("Artikelnaam ontbreekt voor een Locatiekaart.")
+
+        product_image, product_image_error = _image_to_base64_object(
+            getattr(version, 'artikel_foto_url', None),
+            "Artikel-foto",
+        )
+        if product_image_error:
+            raise ValueError(product_image_error)
+
+        company_logo, company_logo_error = _image_to_base64_object(
+            getattr(version, 'bedrijfslogo_url', None),
+            "Bedrijfslogo",
+        )
+        if company_logo_error:
+            raise ValueError(company_logo_error)
+
+        material_type = normalize_material_type(
+            getattr(version, 'materiaaltype', None),
+        )
+        card = {
+            "product": {
+                "name": article_name,
+                "image": product_image,
+            },
+            "company": {
+                "logo": company_logo,
+            },
+            "materialType": material_type.value,
+            "location": {
+                "branchName": getattr(version, 'vestiging_naam', None) or '',
+                "roomName": getattr(version, 'ruimte_naam', None) or '',
+                "storageLocationName": (
+                    getattr(version, 'opslaglocatie_naam', None) or ''
+                ),
+            },
+            "roomType": {
+                "name": getattr(version, 'kamertype_naam', None),
+                "color": getattr(version, 'kamertype_kleur', None),
+            },
+        }
+        if material_type is Materiaaltype.KANBAN and getattr(
+            version,
+            'min_level',
+            None,
+        ) is not None:
+            card["logistics"] = {
+                "minLevel": version.min_level,
+            }
+        cards.append(card)
+
+    return {
+        "printBatchId": print_batch_id,
+        "printerId": LOCATION_CARDS_PRINTER_ID,
+        "cardType": LOCATION_CARDS_CARD_TYPE,
+        "cards": cards,
+        "options": {
+            "paper": "A4",
+            "orientation": "portrait",
+            "cardSize": {
+                "widthMm": 90,
+                "heightMm": 60,
+            },
+            "cardsPerSheet": 8,
+            "color": True,
+            "duplex": True,
+            "duplexFlip": "long-edge",
+        },
+    }
+
+
+def _location_card_response_metadata(response_body, payload):
+    if not isinstance(response_body, dict):
+        raise ValueError("Printservice gaf geen JSON-object terug.")
+    if response_body.get('detail'):
+        raise ValueError(f"Printservice melding: {response_body['detail']}")
+
+    expected_batch_id = payload['printBatchId']
+    if response_body.get('printBatchId') != expected_batch_id:
+        raise ValueError("Printservice gaf een afwijkende printBatchId terug.")
+
+    job_id = response_body.get('jobId')
+    if not isinstance(job_id, str) or not job_id.strip():
+        raise ValueError("Printservice response mist jobId.")
+
+    status = str(response_body.get('status') or '').upper()
+    if status not in {
+        'QUEUED',
+        'ACCEPTED',
+        'PRINTING',
+        'COMPLETED',
+        'ALREADY_QUEUED',
+        'ALREADY_ACCEPTED',
+    }:
+        raise ValueError(f"Printservice gaf onverwachte status: {status or '?'}.")
+
+    card_count = response_body.get('cardCount')
+    expected_card_count = len(payload['cards'])
+    if isinstance(card_count, bool) or card_count != expected_card_count:
+        raise ValueError("Printservice gaf een afwijkend cardCount terug.")
+
+    sheet_count = response_body.get('sheetCount')
+    expected_sheet_count = (expected_card_count + 7) // 8
+    if isinstance(sheet_count, bool) or sheet_count != expected_sheet_count:
+        raise ValueError("Printservice gaf een afwijkend sheetCount terug.")
+
+    return {
+        'printBatchId': expected_batch_id,
+        'jobId': job_id,
+        'status': status,
+        'cardCount': card_count,
+        'sheetCount': sheet_count,
+    }
+
+
+def send_location_cards_to_print_service(versions, print_batch_id=None):
+    """Send one A4 Locatiekaartbatch and return success, error, metadata."""
+    try:
+        payload = build_location_cards_payload(versions, print_batch_id)
+    except (KanbanSettingsError, ValueError) as exc:
+        return False, str(exc), None
+
+    if not PRINT_SERVICE_URL:
+        return False, "PRINT_SERVICE_URL ontbreekt.", None
+
+    headers, header_err = _print_service_headers()
+    if header_err:
+        return False, header_err, None
+
+    endpoint_url = _resolve_print_service_api_url(
+        LOCATION_CARDS_PRINT_ENDPOINT,
+    )
+    if not endpoint_url:
+        return False, "PRINT_SERVICE_URL ontbreekt of is ongeldig.", None
+
+    try:
+        response = requests.post(
+            endpoint_url,
+            json=payload,
+            headers=headers,
+            timeout=PRINT_REQUEST_TIMEOUT,
+            allow_redirects=False,
+        )
+        if 300 <= response.status_code < 400:
+            location = response.headers.get('Location', '(onbekend)')
+            return False, (
+                f"Printservice redirect ({response.status_code}) naar {location}. "
+                "Controleer PRINT_SERVICE_URL."
+            ), None
+
+        response.raise_for_status()
+        response_body = response.json()
+        metadata = _location_card_response_metadata(response_body, payload)
+        return True, None, metadata
+    except requests.RequestException as exc:
+        return False, f"Printservice fout: {exc}", None
+    except (TypeError, ValueError) as exc:
+        return False, str(exc), None
 
 # --- ROUTES ---
 
