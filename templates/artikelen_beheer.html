@@ -327,8 +327,7 @@
         loadArticleImpact(button.getAttribute('data-id'))
     })
 
-    function renderArticleImpact() {
-        var impact = document.getElementById('bewerkImpact')
+    function articleImpactSummary() {
         var newMin = document.getElementById('bewerkKanbanMin').value
         var newRefill = document.getElementById('bewerkKanbanRefill').value
         var changed = newMin !== articleImpactState.originalMin || newRefill !== articleImpactState.originalRefill
@@ -339,13 +338,19 @@
             ((minChanged && item.min_erft_standaard) ||
              (refillChanged && item.aanv_erft_standaard))
         ).length : 0
+        return { changed: changed, affected: affected }
+    }
 
-        if (!changed) {
+    function renderArticleImpact() {
+        var impact = document.getElementById('bewerkImpact')
+        var summary = articleImpactSummary()
+
+        if (!summary.changed) {
             impact.textContent = 'Geen wijziging van de Artikel-Kanbanstandaard; bestaande posities blijven ongewijzigd.'
-        } else if (affected === 0) {
+        } else if (summary.affected === 0) {
             impact.textContent = 'Geen Kanban-posities nemen een nieuwe standaardwaarde over; lokale instellingen blijven ongewijzigd.'
         } else {
-            impact.textContent = affected + ' Kanban-positie(s) nemen de nieuwe standaardwaarde automatisch over.'
+            impact.textContent = summary.affected + ' Kanban-positie(s) nemen de nieuwe standaardwaarde automatisch over.'
         }
     }
 
@@ -369,18 +374,9 @@
 
     function confirmArticleImpact() {
         if (!articleImpactState.loaded) return false
-        var newMin = document.getElementById('bewerkKanbanMin').value
-        var newRefill = document.getElementById('bewerkKanbanRefill').value
-        var changed = newMin !== articleImpactState.originalMin || newRefill !== articleImpactState.originalRefill
-        var minChanged = newMin !== articleImpactState.originalMin
-        var refillChanged = newRefill !== articleImpactState.originalRefill
-        var affected = articleImpactState.items.filter(item =>
-            item.materiaaltype === 'KANBAN' &&
-            ((minChanged && item.min_erft_standaard) ||
-             (refillChanged && item.aanv_erft_standaard))
-        ).length
-        if (!changed || affected === 0) return true
-        return window.confirm(affected + ' Kanban-positie(s) nemen de nieuwe Artikel-Kanbanstandaard over. Doorgaan?')
+        var summary = articleImpactSummary()
+        if (!summary.changed || summary.affected === 0) return true
+        return window.confirm(summary.affected + ' Kanban-positie(s) nemen de nieuwe Artikel-Kanbanstandaard over. Doorgaan?')
     }
 
     // Vervang Modal

@@ -698,8 +698,9 @@ def _get_queue_card(queue_item):
     return db.session.query(KanbanKaart).filter(KanbanKaart.kaart_id == kaart_id).first()
 
 
-def _mark_card_printed(queue_item):
-    card = _get_queue_card(queue_item)
+def _mark_card_printed(queue_item, source_map=None):
+    source = source_map.get(getattr(queue_item, 'kaart_id', None)) if source_map is not None else None
+    card = source[0] if source else _get_queue_card(queue_item)
     if not card or getattr(card, 'status', None) == 'SUPERSEDED':
         return
     card.status = 'PRINTED'
@@ -845,21 +846,14 @@ def _queue_item_display_values(queue_item, source_map=None):
     }
 
 
-app.jinja_env.globals['effective_queue_settings'] = _queue_item_effective_settings
-app.jinja_env.globals['queue_display_values'] = _queue_item_display_values
-
-
 def _queue_item_is_superseded(queue_item, source_map=None):
     source = source_map.get(getattr(queue_item, 'kaart_id', None)) if source_map is not None else None
     card = source[0] if source else _get_queue_card(queue_item)
     return bool(card and getattr(card, 'status', None) == 'SUPERSEDED')
 
 
-app.jinja_env.globals['queue_item_is_superseded'] = _queue_item_is_superseded
-
-
-def _build_print_payload(queue_item):
-    if _queue_item_is_superseded(queue_item):
+def _build_print_payload(queue_item, source_map=None):
+    if _queue_item_is_superseded(queue_item, source_map):
         return None, "Deze Kanban-kaart is verouderd; vraag een nieuwe kaart aan."
 
     product = {
@@ -884,7 +878,7 @@ def _build_print_payload(queue_item):
         return None, company_logo_error
     company["logo"] = company_logo
 
-    effective = _queue_item_effective_settings(queue_item)
+    effective = _queue_item_effective_settings(queue_item, source_map)
     if effective is None:
         return None, "Standaard materiaal kan niet als Kanban-kaart worden geprint."
 
@@ -1101,11 +1095,11 @@ def test_print_service_connectivity():
 
     return True, f"Verbonden met printservice op {parsed.hostname}:{port}."
 
-def send_queue_item_to_print_service(queue_item):
+def send_queue_item_to_print_service(queue_item, source_map=None):
     if not PRINT_SERVICE_URL:
         return False, "PRINT_SERVICE_URL ontbreekt."
 
-    payload, payload_error = _build_print_payload(queue_item)
+    payload, payload_error = _build_print_payload(queue_item, source_map)
     if payload_error:
         return False, payload_error
     headers, header_err = _print_service_headers()
@@ -1841,14 +1835,15 @@ def verstuur_alle_print_opdrachten():
         flash(detail, 'danger')
         return redirect(url_for('assistent_print_queue'))
 
+    queue_sources = _queue_item_sources(items)
     success_count = 0
     fail_count = 0
     fail_messages = []
 
     for item in items:
-        sent, error_msg = send_queue_item_to_print_service(item)
+        sent, error_msg = send_queue_item_to_print_service(item, queue_sources)
         if sent:
-            _mark_card_printed(item)
+            _mark_card_printed(item, queue_sources)
             db.session.delete(item)
             success_count += 1
         else:
