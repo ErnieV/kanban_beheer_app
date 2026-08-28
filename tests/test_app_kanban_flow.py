@@ -1,5 +1,6 @@
 import datetime
 import io
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -281,6 +282,329 @@ def test_catalog_photo_change_supersedes_only_fallback_location_cards(
     assert response.status_code == 302
     assert global_item.foto_url == "new.png"
     assert superseded_position_ids == [12]
+
+
+def test_storage_location_kanban_print_selection_filters_and_validates_assets(
+    app_module,
+    monkeypatch,
+):
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A", type_opslag="GRIJP")
+    room = SimpleNamespace(ruimte_id=9, naam="Behandelkamer", nummer="1")
+    room_type = SimpleNamespace(ruimte_type_id=8, naam="Behandeling", kleur_hex="#123456")
+    company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    valid_position = SimpleNamespace(
+        voorraad_positie_id=12,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url=None,
+    )
+    standard_position = SimpleNamespace(
+        voorraad_positie_id=13,
+        materiaaltype="STANDAARD",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url=None,
+    )
+    invalid_position = SimpleNamespace(
+        voorraad_positie_id=14,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url="location.png",
+    )
+    valid_article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        eigen_naam="Verband",
+        foto_url="article.png",
+        verpakkingseenheid_tekst="doos",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    standard_article = SimpleNamespace(
+        lokaal_artikel_id=8,
+        eigen_naam="Naaldencontainer",
+        foto_url="standard.png",
+        verpakkingseenheid_tekst="stuk",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    invalid_article = SimpleNamespace(
+        lokaal_artikel_id=9,
+        eigen_naam="Onbekend artikel",
+        foto_url=None,
+        verpakkingseenheid_tekst="stuk",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    rows = [
+        (valid_position, valid_article, None, kast, room, room_type, company),
+        (standard_position, standard_article, None, kast, room, room_type, company),
+        (invalid_position, invalid_article, None, kast, room, room_type, company),
+    ]
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+    class Query:
+        def join(self, *args, **kwargs):
+            return self
+
+        def outerjoin(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return rows
+
+    class FakeSession:
+        def query(self, *models):
+            return Query()
+
+    for name, fields in {
+        "Voorraad_Positie": ["lokaal_artikel_id", "kast_id", "bedrijf_id"],
+        "Lokaal_Artikel": ["lokaal_artikel_id", "global_id", "eigen_naam"],
+        "Global_Catalogus": ["global_id"],
+        "Kast": ["kast_id", "ruimte_id", "bedrijf_id"],
+        "Ruimte": ["ruimte_id", "vestiging_id", "ruimte_type_id", "bedrijf_id"],
+        "Ruimte_Type": ["ruimte_type_id", "bedrijf_id"],
+        "Bedrijf": ["bedrijf_id"],
+    }.items():
+        monkeypatch.setattr(
+            app_module,
+            name,
+            SimpleNamespace(**{field: FakeField() for field in fields}),
+        )
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = app_module.app.test_client().get(
+        "/assistent/kast/4/print/kanban"
+    )
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Kanban-kaartjes printen" in html
+    assert "2 toepasselijke" in html
+    assert 'value="12"' in html
+    assert re.search(r'value="12"\s+checked', html)
+    assert re.search(r'value="14"\s+disabled', html)
+    assert "Artikel-foto ontbreekt." in html
+    assert "Naaldencontainer" not in html
+
+    response = app_module.app.test_client().get(
+        "/assistent/kast/4/print/locatie"
+    )
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Locatiekaartjes printen" in html
+    assert "3 toepasselijke" in html
+    assert "Naaldencontainer" in html
+    assert 'value="13"' in html
+    assert re.search(r'value="13"\s+checked', html)
+    assert re.search(r'value="14"\s+disabled', html)
+    assert "Min 3" in html
+    assert "Aanv. 4" not in html
+
+    company.logo_url = None
+    response = app_module.app.test_client().get(
+        "/assistent/kast/4/print/locatie"
+    )
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Bedrijfslogo ontbreekt." in html
+    assert re.search(r'value="12"\s+disabled', html)
+
+
+def test_storage_location_print_only_processes_selected_valid_items(
+    app_module,
+    monkeypatch,
+):
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
+    company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    room = SimpleNamespace(naam="Behandelkamer", nummer=None)
+    room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
+    valid_position = SimpleNamespace(
+        voorraad_positie_id=12,
+        lokaal_artikel_id=7,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url=None,
+    )
+    invalid_position = SimpleNamespace(
+        voorraad_positie_id=14,
+        lokaal_artikel_id=9,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url=None,
+    )
+    valid_article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        eigen_naam="Verband",
+        foto_url="article.png",
+        verpakkingseenheid_tekst="doos",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    invalid_article = SimpleNamespace(
+        lokaal_artikel_id=9,
+        eigen_naam="Onbekend artikel",
+        foto_url=None,
+        verpakkingseenheid_tekst="stuk",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    rows = [
+        (valid_position, valid_article, None, kast, room, room_type, company),
+        (invalid_position, invalid_article, None, kast, room, room_type, company),
+    ]
+    added = []
+    created_rows = []
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    class FakeSession:
+        def add(self, item):
+            added.append(item)
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(
+        app_module,
+        "create_queue_item",
+        lambda *row: created_rows.append(row) or "queue-item",
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kast/4/print/kanban",
+        data={
+            "_csrf_token": "test-csrf",
+            "position_ids": ["12", "14"],
+        },
+    )
+
+    assert response.status_code == 302
+    assert [row[0].voorraad_positie_id for row in created_rows] == [12]
+    assert added == ["queue-item"]
+
+
+def test_location_print_selection_creates_only_selected_location_versions(
+    app_module,
+    monkeypatch,
+):
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
+    company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    room = SimpleNamespace(naam="Behandelkamer", nummer=None)
+    room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
+    position = SimpleNamespace(
+        voorraad_positie_id=13,
+        lokaal_artikel_id=8,
+        materiaaltype="STANDAARD",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url=None,
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=8,
+        eigen_naam="Naaldencontainer",
+        foto_url="standard.png",
+        verpakkingseenheid_tekst="stuk",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    row = (position, article, None, kast, room, room_type, company)
+    created_rows = []
+
+    class FakeQuery:
+        def all(self):
+            return [row]
+
+    class FakeSession:
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(
+        app_module,
+        "create_or_reuse_locatiekaart_version",
+        lambda *source_row: created_rows.append(source_row) or ("version", True),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kast/4/print/locatie",
+        data={
+            "_csrf_token": "test-csrf",
+            "position_ids": ["13"],
+        },
+    )
+
+    assert response.status_code == 302
+    assert [source_row[0].voorraad_positie_id for source_row in created_rows] == [13]
+
+
+def test_empty_storage_location_print_selection_has_no_side_effect(
+    app_module,
+    monkeypatch,
+):
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Lege kast")
+    commits = []
+
+    class FakeQuery:
+        def all(self):
+            return []
+
+    class FakeSession:
+        def commit(self):
+            commits.append(True)
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kast/4/print/kanban",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 200
+    assert "Selecteer minimaal één geldig Artikel" in response.get_data(as_text=True)
+    assert 'id="printSelectionButton" disabled' in response.get_data(as_text=True)
+    assert commits == []
 
 
 class _CatalogQuery:
@@ -655,6 +979,8 @@ def test_storage_location_page_renders_effective_kanban_values(
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert "Kast A" in html
+    assert "Kanban-kaartjes (1)" in html
+    assert "Locatiekaartjes (1)" in html
     assert "Min 3" in html
     assert "Aanv. 4" in html
     assert "Max:" not in html

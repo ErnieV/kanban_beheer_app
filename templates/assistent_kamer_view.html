@@ -16,10 +16,12 @@
 <div class="accordion" id="kastenAccordion">
     {% for kast, inhoud in kasten_data.items() %}
     {% set kanban_count = namespace(value=0) %}
+    {% set locatiekaart_count = namespace(value=0) %}
     {% for row in inhoud %}
         {% if position_material_type(row[0]).value == 'KANBAN' %}
             {% set kanban_count.value = kanban_count.value + 1 %}
         {% endif %}
+        {% set locatiekaart_count.value = locatiekaart_count.value + 1 %}
     {% endfor %}
     <div class="accordion-item mb-3 shadow-sm border">
         <h2 class="accordion-header" id="heading{{ kast.kast_id }}">
@@ -29,13 +31,18 @@
                     <span class="text-muted fw-normal ms-2 small">({{ kast.type_opslag }})</span>
                 </button>
                 
-                <!-- BATCH PRINT KNOP -->
-                <form action="{{ url_for('kanban_aanvragen_kast', kast_id=kast.kast_id) }}" method="POST" class="ms-3" onsubmit="return confirm('Wil je kaartjes aanvragen voor ALLE artikelen in deze kast?');">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-sm btn-outline-dark" title="{% if kanban_count.value == 0 %}Deze Opslaglocatie bevat geen Kanban-materiaal{% else %}Print alle Kanban-kaartjes voor deze Opslaglocatie{% endif %}" {% if kanban_count.value == 0 %}disabled{% endif %}>
-                        <i class="bi bi-printer-fill"></i> <span class="d-none d-md-inline">Alles Printen</span>
-                    </button>
-                </form>
+                <div class="d-flex gap-2 ms-3">
+                    <form action="{{ url_for('kast_print_selectie', kast_id=kast.kast_id, kaart_type='kanban') }}" method="GET">
+                        <button type="submit" class="btn btn-sm btn-outline-dark" title="{% if kanban_count.value == 0 %}Deze Opslaglocatie bevat geen Kanban-materiaal{% else %}Kanban-kaartjes voor deze Opslaglocatie selecteren{% endif %}" {% if kanban_count.value == 0 %}disabled{% endif %}>
+                            <i class="bi bi-printer-fill"></i> <span class="d-none d-md-inline">Kanban-kaartjes ({{ kanban_count.value }})</span>
+                        </button>
+                    </form>
+                    <form action="{{ url_for('kast_print_selectie', kast_id=kast.kast_id, kaart_type='locatie') }}" method="GET">
+                        <button type="submit" class="btn btn-sm btn-outline-primary" title="{% if locatiekaart_count.value == 0 %}Deze Opslaglocatie is leeg{% else %}Locatiekaartjes voor deze Opslaglocatie selecteren{% endif %}" {% if locatiekaart_count.value == 0 %}disabled{% endif %}>
+                            <i class="bi bi-geo-alt-fill"></i> <span class="d-none d-md-inline">Locatiekaartjes ({{ locatiekaart_count.value }})</span>
+                        </button>
+                    </form>
+                </div>
             </div>
         </h2>
         <div id="collapse{{ kast.kast_id }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}" data-bs-parent="#kastenAccordion">

@@ -1503,6 +1503,120 @@ def kast_selectie():
     return render_template('kast_selectie.html', kasten=kasten)
 
 
+def _kast_inventory_query(kast_id, bedrijf_id):
+    if not all((
+        Voorraad_Positie,
+        Lokaal_Artikel,
+        Global_Catalogus,
+        Kast,
+        Ruimte,
+        Ruimte_Type,
+        Bedrijf,
+    )):
+        return db.session.query(
+            Voorraad_Positie,
+            Lokaal_Artikel,
+            Global_Catalogus,
+        ).join(
+            Lokaal_Artikel,
+            Voorraad_Positie.lokaal_artikel_id
+            == Lokaal_Artikel.lokaal_artikel_id,
+        ).outerjoin(
+            Global_Catalogus,
+            Lokaal_Artikel.global_id == Global_Catalogus.global_id,
+        ).filter(
+            Voorraad_Positie.kast_id == kast_id,
+            Voorraad_Positie.bedrijf_id == bedrijf_id,
+        )
+    return db.session.query(
+        Voorraad_Positie,
+        Lokaal_Artikel,
+        Global_Catalogus,
+        Kast,
+        Ruimte,
+        Ruimte_Type,
+        Bedrijf,
+    ).join(
+        Lokaal_Artikel,
+        Voorraad_Positie.lokaal_artikel_id
+        == Lokaal_Artikel.lokaal_artikel_id,
+    ).outerjoin(
+        Global_Catalogus,
+        Lokaal_Artikel.global_id == Global_Catalogus.global_id,
+    ).join(
+        Kast,
+        Voorraad_Positie.kast_id == Kast.kast_id,
+    ).join(
+        Ruimte,
+        Kast.ruimte_id == Ruimte.ruimte_id,
+    ).outerjoin(
+        Ruimte_Type,
+        Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id,
+    ).join(
+        Bedrijf,
+        Voorraad_Positie.bedrijf_id == Bedrijf.bedrijf_id,
+    ).filter(
+        Voorraad_Positie.kast_id == kast_id,
+        Voorraad_Positie.bedrijf_id == bedrijf_id,
+    )
+
+
+def _storage_location_print_item(row, kaart_type):
+    position, article, global_item, kast, room, room_type, company = row
+    material_type = _position_material_type(position)
+    effective = effective_position_kanban_settings(position, article)
+    article_name = (
+        getattr(article, 'eigen_naam', None)
+        or getattr(global_item, 'generieke_naam', None)
+        or ''
+    )
+    if kaart_type == 'kanban':
+        product_photo_url = (
+            getattr(article, 'foto_url', None)
+            or getattr(global_item, 'foto_url', None)
+        )
+        applicable = material_type is Materiaaltype.KANBAN
+    else:
+        product_photo_url = (
+            getattr(article, 'foto_url', None)
+            or getattr(global_item, 'foto_url', None)
+        )
+        applicable = True
+
+    reasons = []
+    if not product_photo_url:
+        reasons.append('Artikel-foto ontbreekt.')
+    if not getattr(company, 'logo_url', None):
+        reasons.append('Bedrijfslogo ontbreekt.')
+
+    return {
+        'position_id': position.voorraad_positie_id,
+        'display_name': article_name or 'Naamloos Artikel',
+        'product_photo_url': product_photo_url,
+        'material_type': material_type.value,
+        'min_level': effective.min_level if effective else None,
+        'refill_quantity': effective.refill_quantity if effective else None,
+        'valid': applicable and not reasons,
+        'applicable': applicable,
+        'reasons': reasons,
+    }
+
+
+def _kast_print_selection_items(rows, kaart_type):
+    items = [
+        _storage_location_print_item(row, kaart_type)
+        for row in rows
+    ]
+    items = [item for item in items if item['applicable']]
+    return sorted(
+        items,
+        key=lambda item: (
+            item['display_name'].casefold(),
+            item['position_id'],
+        ),
+    )
+
+
 @app.route('/assistent/kast/<int:kast_id>')
 def assistent_kast_inhoud(kast_id):
     if not check_db():
@@ -1513,23 +1627,12 @@ def assistent_kast_inhoud(kast_id):
         flash('Kast niet gevonden of geen toegang.', 'warning')
         return redirect(url_for('kast_selectie'))
 
-    inhoud = db.session.query(
-        Voorraad_Positie,
-        Lokaal_Artikel,
-        Global_Catalogus,
-    ).join(
-        Lokaal_Artikel,
-        Voorraad_Positie.lokaal_artikel_id
-        == Lokaal_Artikel.lokaal_artikel_id,
-    ).outerjoin(
-        Global_Catalogus,
-        Lokaal_Artikel.global_id == Global_Catalogus.global_id,
-    ).filter(
-        Voorraad_Positie.kast_id == kast_id,
-        Voorraad_Positie.bedrijf_id == bedrijf_id,
-    ).order_by(
-        Lokaal_Artikel.eigen_naam,
-    ).all()
+    inhoud = [
+        row[:3]
+        for row in _kast_inventory_query(kast_id, bedrijf_id).order_by(
+            Lokaal_Artikel.eigen_naam,
+        ).all()
+    ]
     artikelen = db.session.query(Lokaal_Artikel).filter_by(
         bedrijf_id=bedrijf_id,
     ).order_by(
@@ -1540,6 +1643,11 @@ def assistent_kast_inhoud(kast_id):
         kast=kast,
         inhoud=inhoud,
         artikelen=artikelen,
+        kanban_count=sum(
+            _position_material_type(row[0]) is Materiaaltype.KANBAN
+            for row in inhoud
+        ),
+        locatiekaart_count=len(inhoud),
     )
 
 
@@ -1639,6 +1747,99 @@ def add_to_kast_from_room(kast_id):
         flash('Artikel zit al in de kast.', 'warning')
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
+
+@app.route('/assistent/kast/<int:kast_id>/print/<kaart_type>', methods=['GET', 'POST'])
+def kast_print_selectie(kast_id, kaart_type):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    if kaart_type not in {'kanban', 'locatie'}:
+        flash('Onbekend kaarttype.', 'warning')
+        return redirect(url_for('kast_selectie'))
+    kaart_type_label = (
+        'Kanban-kaartjes'
+        if kaart_type == 'kanban'
+        else 'Locatiekaartjes'
+    )
+
+    bedrijf_id = get_huidig_bedrijf_id()
+    kast = get_scoped_item(Kast, kast_id, bedrijf_id)
+    if not kast:
+        flash('Opslaglocatie niet gevonden of geen toegang.', 'warning')
+        return redirect(url_for('kast_selectie'))
+
+    rows = _kast_inventory_query(kast_id, bedrijf_id).all()
+    selection_items = _kast_print_selection_items(rows, kaart_type)
+    rows_by_position_id = {
+        row[0].voorraad_positie_id: row
+        for row in rows
+    }
+    applicable_items = [item for item in selection_items if item['applicable']]
+    valid_items = [item for item in applicable_items if item['valid']]
+    selected_ids = None
+
+    if request.method == 'POST':
+        selected_ids = {
+            int(value)
+            for value in request.form.getlist('position_ids')
+            if value.isdigit()
+        }
+        selected_items = [
+            item for item in valid_items
+            if item['position_id'] in selected_ids
+        ]
+        if not selected_items:
+            flash('Selecteer minimaal één geldig Artikel om te printen.', 'warning')
+            return render_template(
+                'kast_print_selectie.html',
+                kast=kast,
+                kaart_type=kaart_type,
+                kaart_type_label=kaart_type_label,
+                selection_items=selection_items,
+                applicable_count=len(applicable_items),
+                valid_count=len(valid_items),
+                selected_ids=set(),
+            )
+
+        try:
+            for item in selected_items:
+                row = rows_by_position_id[item['position_id']]
+                if kaart_type == 'kanban':
+                    db.session.add(create_queue_item(*row))
+                else:
+                    create_or_reuse_locatiekaart_version(*row)
+            db.session.commit()
+            kaartje_label = (
+                'Kanban-kaartje'
+                if kaart_type == 'kanban'
+                else 'Locatiekaartje'
+            )
+            kaartje_meervoud = 's' if len(selected_items) != 1 else ''
+            flash(
+                f'{len(selected_items)} {kaartje_label}{kaartje_meervoud} aangevraagd.',
+                'success',
+            )
+            return redirect(url_for('assistent_kast_inhoud', kast_id=kast_id))
+        except Exception as exc:
+            db.session.rollback()
+            flash(f'Fout bij printaanvraag: {exc}', 'danger')
+
+    if selected_ids is None:
+        selected_ids = {
+            item['position_id']
+            for item in valid_items
+        }
+    return render_template(
+        'kast_print_selectie.html',
+        kast=kast,
+        kaart_type=kaart_type,
+        kaart_type_label=kaart_type_label,
+        selection_items=selection_items,
+        applicable_count=len(applicable_items),
+        valid_count=len(valid_items),
+        selected_ids=selected_ids,
+    )
+
+
 @app.route('/assistent/kanban/aanvragen/enkel/<int:voorraad_positie_id>', methods=['POST'])
 def kanban_aanvragen_enkel(voorraad_positie_id):
     if not check_db():
@@ -1682,41 +1883,9 @@ def kanban_aanvragen_enkel(voorraad_positie_id):
 
 @app.route('/assistent/kanban/aanvragen/kast/<int:kast_id>', methods=['POST'])
 def kanban_aanvragen_kast(kast_id):
-    if not check_db():
-        return redirect(url_for('dashboard'))
-    bedrijf_id = get_huidig_bedrijf_id()
-    try:
-        results = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus, Kast, Ruimte, Ruimte_Type, Bedrijf)\
-            .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
-            .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
-            .join(Kast, Voorraad_Positie.kast_id == Kast.kast_id)\
-            .join(Ruimte, Kast.ruimte_id == Ruimte.ruimte_id)\
-            .outerjoin(Ruimte_Type, Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id)\
-            .join(Bedrijf, Voorraad_Positie.bedrijf_id == Bedrijf.bedrijf_id)\
-            .filter(Voorraad_Positie.kast_id == kast_id, Voorraad_Positie.bedrijf_id == bedrijf_id).all()
-
-        kanban_results = [
-            row for row in results
-            if _position_material_type(row[0]) is Materiaaltype.KANBAN
-        ]
-        if not kanban_results:
-            flash("Deze opslaglocatie bevat geen Kanban-materiaal.", "info")
-            return redirect(request.referrer or url_for('assistent_kamers'))
-
-        count = 0
-        for row in kanban_results:
-            queue_item = create_queue_item(*row)
-            db.session.add(queue_item)
-            count += 1
-            
-        db.session.commit()
-        flash(f"{count} kaartjes aangevraagd voor kast!", "success")
-        
-    except Exception as e:
-        db.session.rollback()
-        flash(f"Fout bij batch aanvraag: {e}", "danger")
-
-    return redirect(request.referrer)
+    return redirect(
+        url_for('kast_print_selectie', kast_id=kast_id, kaart_type='kanban')
+    )
 
 @app.route('/assistent/print-queue')
 def assistent_print_queue():
