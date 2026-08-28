@@ -24,6 +24,8 @@ from azure.storage.blob import BlobServiceClient
 from kanban_domain import (
     KanbanSettingsError,
     KanbanStandard,
+    LocatiekaartInhoud,
+    LocatiekaartStatus,
     Materiaaltype,
     effective_kanban_settings,
     normalized_position_overrides,
@@ -103,6 +105,35 @@ class KanbanKaart(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     printed_at = db.Column(db.DateTime, nullable=True)
     cancelled_at = db.Column(db.DateTime, nullable=True)
+
+
+class LocatiekaartVersie(db.Model):
+    __tablename__ = 'Locatiekaart_Versie'
+
+    locatiekaart_versie_id = db.Column(db.Integer, primary_key=True)
+    bedrijf_id = db.Column(db.Integer, nullable=False, index=True)
+    voorraad_positie_id = db.Column(db.Integer, nullable=False, index=True)
+    lokaal_artikel_id = db.Column(db.Integer, nullable=False, index=True)
+    inhoud_hash = db.Column(db.String(64), nullable=False)
+    artikelnaam = db.Column(db.String(255), nullable=False)
+    artikel_foto_url = db.Column(db.String(2048), nullable=True)
+    bedrijfslogo_url = db.Column(db.String(2048), nullable=True)
+    vestiging_naam = db.Column(db.String(255), nullable=False)
+    ruimte_naam = db.Column(db.String(255), nullable=False)
+    opslaglocatie_naam = db.Column(db.String(255), nullable=False)
+    kamertype_naam = db.Column(db.String(255), nullable=True)
+    kamertype_kleur = db.Column(db.String(20), nullable=True)
+    materiaaltype = db.Column(db.String(20), nullable=False)
+    min_level = db.Column(db.Integer, nullable=True)
+    status = db.Column(
+        db.String(20),
+        nullable=False,
+        default=LocatiekaartStatus.PENDING_PRINT.value,
+    )
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    printed_at = db.Column(db.DateTime, nullable=True)
+    cancelled_at = db.Column(db.DateTime, nullable=True)
+    superseded_at = db.Column(db.DateTime, nullable=True)
 
 
 class KanbanScanlijstItem(db.Model):
@@ -511,6 +542,251 @@ app.jinja_env.globals['position_kanban_override_values'] = (
     position_kanban_override_values
 )
 app.jinja_env.globals['kanban_display_values'] = kanban_display_values
+
+
+def build_locatiekaart_content(
+    position,
+    article,
+    global_item,
+    storage_location,
+    room,
+    room_type,
+    company,
+    branch,
+):
+    """Build the immutable snapshot used to identify one storage location."""
+    effective = effective_position_kanban_settings(position, article)
+    room_name = room.naam
+    if getattr(room, 'nummer', None):
+        room_name = f"{room.nummer} {room_name}"
+
+    return LocatiekaartInhoud(
+        artikelnaam=(
+            getattr(article, 'eigen_naam', None)
+            or getattr(global_item, 'generieke_naam', None)
+            or ''
+        ),
+        artikel_foto_url=(
+            getattr(article, 'foto_url', None)
+            or getattr(global_item, 'foto_url', None)
+        ),
+        bedrijfslogo_url=getattr(company, 'logo_url', None),
+        vestiging_naam=getattr(branch, 'naam', None) or '',
+        ruimte_naam=room_name,
+        opslaglocatie_naam=getattr(storage_location, 'naam', None) or '',
+        kamertype_naam=getattr(room_type, 'naam', None),
+        kamertype_kleur=getattr(room_type, 'kleur_hex', None),
+        materiaaltype=_position_material_type(position),
+        min_level=effective.min_level if effective else None,
+        refill_quantity=effective.refill_quantity if effective else None,
+    )
+
+
+def create_or_reuse_locatiekaart_version(
+    position,
+    article,
+    global_item,
+    storage_location,
+    room,
+    room_type,
+    company,
+    branch,
+):
+    """Reuse the active version or create a pending version for new content."""
+    content = build_locatiekaart_content(
+        position,
+        article,
+        global_item,
+        storage_location,
+        room,
+        room_type,
+        company,
+        branch,
+    )
+    active_statuses = [
+        LocatiekaartStatus.PENDING_PRINT.value,
+        LocatiekaartStatus.PRINTED.value,
+    ]
+    active_versions = db.session.query(LocatiekaartVersie).filter(
+        LocatiekaartVersie.voorraad_positie_id
+        == position.voorraad_positie_id,
+        LocatiekaartVersie.status.in_(active_statuses),
+    ).order_by(
+        LocatiekaartVersie.locatiekaart_versie_id.desc(),
+    ).all()
+    if active_versions and active_versions[0].inhoud_hash == content.fingerprint:
+        return active_versions[0], False
+
+    _mark_locatiekaart_versions_superseded(active_versions)
+    version = LocatiekaartVersie(
+        bedrijf_id=company.bedrijf_id,
+        voorraad_positie_id=position.voorraad_positie_id,
+        lokaal_artikel_id=position.lokaal_artikel_id,
+        inhoud_hash=content.fingerprint,
+        artikelnaam=content.artikelnaam,
+        artikel_foto_url=content.artikel_foto_url,
+        bedrijfslogo_url=content.bedrijfslogo_url,
+        vestiging_naam=content.vestiging_naam,
+        ruimte_naam=content.ruimte_naam,
+        opslaglocatie_naam=content.opslaglocatie_naam,
+        kamertype_naam=content.kamertype_naam,
+        kamertype_kleur=content.kamertype_kleur,
+        materiaaltype=content.materiaaltype.value,
+        min_level=content.min_level,
+        status=LocatiekaartStatus.PENDING_PRINT.value,
+        created_at=utcnow(),
+    )
+    db.session.add(version)
+    return version, True
+
+
+def mark_locatiekaart_version_printed(version):
+    """Mark a version printed only after the local printservice accepts it."""
+    if version.status != LocatiekaartStatus.PENDING_PRINT.value:
+        return version.status == LocatiekaartStatus.PRINTED.value
+    version.status = LocatiekaartStatus.PRINTED.value
+    version.printed_at = utcnow()
+    version.cancelled_at = None
+    return True
+
+
+def mark_locatiekaart_version_cancelled(version):
+    """Cancel a pending version without changing the Kanban card lifecycle."""
+    if version.status != LocatiekaartStatus.PENDING_PRINT.value:
+        return False
+    version.status = LocatiekaartStatus.CANCELLED.value
+    version.printed_at = None
+    version.cancelled_at = utcnow()
+    return True
+
+
+def _mark_locatiekaart_versions_superseded(versions):
+    for version in versions:
+        if getattr(version, 'status', None) in {
+            LocatiekaartStatus.PENDING_PRINT.value,
+            LocatiekaartStatus.PRINTED.value,
+        }:
+            version.status = LocatiekaartStatus.SUPERSEDED.value
+            version.superseded_at = utcnow()
+
+
+def _supersede_locatiekaart_versions_for_position_ids(position_ids):
+    position_ids = {item for item in position_ids if item is not None}
+    if not position_ids:
+        return
+    query_factory = getattr(db.session, 'query', None)
+    if not query_factory:
+        return
+    versions = query_factory(LocatiekaartVersie).filter(
+        LocatiekaartVersie.voorraad_positie_id.in_(position_ids),
+        LocatiekaartVersie.status.in_([
+            LocatiekaartStatus.PENDING_PRINT.value,
+            LocatiekaartStatus.PRINTED.value,
+        ]),
+    ).all()
+    _mark_locatiekaart_versions_superseded(
+        version for version in versions
+        if hasattr(version, 'inhoud_hash') and hasattr(version, 'status')
+    )
+
+
+def _position_ids_for_article(article_id):
+    query_factory = getattr(db.session, 'query', None)
+    if not query_factory or not Voorraad_Positie:
+        return []
+    rows = query_factory(Voorraad_Positie).filter(
+        Voorraad_Positie.lokaal_artikel_id == article_id,
+    ).all()
+    return [
+        position.voorraad_positie_id
+        for position in rows
+        if hasattr(position, 'voorraad_positie_id')
+    ]
+
+
+def _position_ids_with_changed_article_standard(
+    article_id,
+    old_standard,
+    new_standard,
+):
+    query_factory = getattr(db.session, 'query', None)
+    if not query_factory or not Voorraad_Positie:
+        return []
+    rows = query_factory(Voorraad_Positie).filter(
+        Voorraad_Positie.lokaal_artikel_id == article_id,
+    ).all()
+    changed_ids = []
+    for position in rows:
+        if not hasattr(position, 'voorraad_positie_id'):
+            continue
+        old_effective = _effective_settings_from_standard(
+            position,
+            old_standard,
+        )
+        new_effective = _effective_settings_from_standard(
+            position,
+            new_standard,
+        )
+        if old_effective != new_effective:
+            changed_ids.append(position.voorraad_positie_id)
+    return changed_ids
+
+
+def _supersede_locatiekaart_versions_for_company(company_id):
+    query_factory = getattr(db.session, 'query', None)
+    if not query_factory:
+        return
+    versions = query_factory(LocatiekaartVersie).filter(
+        LocatiekaartVersie.bedrijf_id == company_id,
+        LocatiekaartVersie.status.in_([
+            LocatiekaartStatus.PENDING_PRINT.value,
+            LocatiekaartStatus.PRINTED.value,
+        ]),
+    ).all()
+    _mark_locatiekaart_versions_superseded(
+        version for version in versions
+        if hasattr(version, 'inhoud_hash') and hasattr(version, 'status')
+    )
+
+
+def _position_ids_for_scope(scope, item_id):
+    query_factory = getattr(db.session, 'query', None)
+    if not query_factory or not Voorraad_Positie:
+        return []
+
+    query = query_factory(Voorraad_Positie)
+    if scope == 'kast':
+        query = query.filter(Voorraad_Positie.kast_id == item_id)
+    elif scope == 'ruimte' and Kast:
+        query = query.join(
+            Kast,
+            Voorraad_Positie.kast_id == Kast.kast_id,
+        ).filter(Kast.ruimte_id == item_id)
+    elif scope == 'vestiging' and Kast and Ruimte:
+        query = query.join(
+            Kast,
+            Voorraad_Positie.kast_id == Kast.kast_id,
+        ).join(
+            Ruimte,
+            Kast.ruimte_id == Ruimte.ruimte_id,
+        ).filter(Ruimte.vestiging_id == item_id)
+    elif scope == 'ruimte_type' and Kast and Ruimte:
+        query = query.join(
+            Kast,
+            Voorraad_Positie.kast_id == Kast.kast_id,
+        ).join(
+            Ruimte,
+            Kast.ruimte_id == Ruimte.ruimte_id,
+        ).filter(Ruimte.ruimte_type_id == item_id)
+    else:
+        return []
+
+    rows = query.all()
+    return [
+        position.voorraad_positie_id
+        for position in rows
+        if hasattr(position, 'voorraad_positie_id')
+    ]
 
 
 def _create_kanban_card(pos, art, kast, ruimte, bedrijf, effective=None):
@@ -1298,6 +1574,10 @@ def update_voorraad_positie(voorraad_positie_id):
         _set_position_kanban_values(positie, artikel, request.form)
         new_effective = effective_position_kanban_settings(positie, artikel)
         _supersede_cards_for_position(positie, old_effective, new_effective)
+        if old_effective != new_effective:
+            _supersede_locatiekaart_versions_for_position_ids(
+                [positie.voorraad_positie_id]
+            )
     except KanbanSettingsError as exc:
         flash(str(exc), 'danger')
         return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
@@ -1858,7 +2138,23 @@ def artikelen_beheer():
                     flash(str(exc), 'danger')
                     return redirect(url_for('artikelen_beheer'))
 
-                artikel.eigen_naam = request.form.get('naam')
+                old_name = getattr(artikel, 'eigen_naam', None)
+                old_photo = getattr(artikel, 'foto_url', None)
+                position_ids = _position_ids_for_article(artikel_id)
+                standard_change_ids = _position_ids_with_changed_article_standard(
+                    artikel_id,
+                    old_standard,
+                    standard,
+                )
+                new_name = request.form.get('naam')
+                new_photo = old_photo
+                file = request.files.get('afbeelding')
+                if file:
+                    url = upload_image_to_azure(file)
+                    if url and "ERROR" not in url:
+                        new_photo = url
+
+                artikel.eigen_naam = new_name
                 artikel.verpakkingseenheid_tekst = request.form.get('eenheid')
                 _supersede_cards_for_article(
                     artikel_id,
@@ -1866,10 +2162,14 @@ def artikelen_beheer():
                     standard,
                 )
                 _set_article_kanban_standard(artikel, standard)
-                file = request.files.get('afbeelding')
-                if file:
-                    url = upload_image_to_azure(file)
-                    if url and "ERROR" not in url: artikel.foto_url = url
+                artikel.foto_url = new_photo
+                if old_name != new_name or old_photo != new_photo:
+                    location_card_position_ids = position_ids
+                else:
+                    location_card_position_ids = standard_change_ids
+                _supersede_locatiekaart_versions_for_position_ids(
+                    location_card_position_ids
+                )
                 db.session.commit()
                 flash('Artikel bijgewerkt.', 'success')
         return redirect(url_for('artikelen_beheer'))
@@ -1915,6 +2215,13 @@ def vervang_artikel():
         doel_id = nieuw.lokaal_artikel_id
 
     posities = db.session.query(Voorraad_Positie).filter_by(bedrijf_id=bedrijf_id, lokaal_artikel_id=oud_lokaal_id).all()
+    _supersede_locatiekaart_versions_for_position_ids(
+        [
+            position.voorraad_positie_id
+            for position in posities
+            if hasattr(position, 'voorraad_positie_id')
+        ]
+    )
     for pos in posities:
         if db.session.query(Voorraad_Positie).filter_by(bedrijf_id=bedrijf_id, kast_id=pos.kast_id, lokaal_artikel_id=doel_id).first(): db.session.delete(pos)
         else: pos.lokaal_artikel_id = doel_id
@@ -2032,11 +2339,14 @@ def beheer_bedrijf():
         flash('Bedrijf niet gevonden.', 'warning')
         return redirect(url_for('dashboard'))
     if request.method == 'POST':
+        old_logo = getattr(bedrijf, 'logo_url', None)
         bedrijf.naam = request.form.get('naam')
         file = request.files.get('logo')
         if file:
             url = upload_image_to_azure(file)
             if url and "ERROR" not in url: bedrijf.logo_url = url
+        if old_logo != getattr(bedrijf, 'logo_url', None):
+            _supersede_locatiekaart_versions_for_company(bedrijf_id)
         db.session.commit()
         return redirect(url_for('beheer_bedrijf'))
     return render_template('beheer_bedrijf.html', bedrijf=bedrijf)
@@ -2177,7 +2487,83 @@ def verwijder_item(type, id):
 
 @app.route('/beheer/update/<type>/<int:id>', methods=['POST'])
 def update_item(type, id):
-    # Generieke update functie
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+
+    try:
+        if type == 'vestiging':
+            item = get_scoped_item(Vestiging, id, bedrijf_id)
+            if not item:
+                flash('Vestiging niet gevonden of geen toegang.', 'warning')
+                return redirect(request.referrer or url_for('beheer_infra'))
+            changed = (
+                getattr(item, 'naam', None) != request.form.get('naam')
+            )
+            item.naam = request.form.get('naam')
+            item.adres = request.form.get('adres')
+            if changed:
+                _supersede_locatiekaart_versions_for_position_ids(
+                    _position_ids_for_scope('vestiging', id)
+                )
+        elif type == 'ruimte':
+            item = get_scoped_item(Ruimte, id, bedrijf_id)
+            if not item:
+                flash('Ruimte niet gevonden of geen toegang.', 'warning')
+                return redirect(request.referrer or url_for('beheer_infra'))
+            changed = (
+                getattr(item, 'naam', None) != request.form.get('naam')
+                or getattr(item, 'nummer', None) != request.form.get('nummer')
+                or str(getattr(item, 'ruimte_type_id', None) or '')
+                != str(request.form.get('ruimte_type_id') or '')
+            )
+            item.naam = request.form.get('naam')
+            item.nummer = request.form.get('nummer')
+            item.ruimte_type_id = request.form.get('ruimte_type_id', type=int)
+            if changed:
+                _supersede_locatiekaart_versions_for_position_ids(
+                    _position_ids_for_scope('ruimte', id)
+                )
+        elif type == 'kast':
+            item = get_scoped_item(Kast, id, bedrijf_id)
+            if not item:
+                flash('Opslaglocatie niet gevonden of geen toegang.', 'warning')
+                return redirect(request.referrer or url_for('beheer_infra'))
+            changed = (
+                getattr(item, 'naam', None) != request.form.get('naam')
+                or getattr(item, 'type_opslag', None)
+                != request.form.get('type_opslag')
+            )
+            item.naam = request.form.get('naam')
+            item.type_opslag = request.form.get('type_opslag')
+            if changed:
+                _supersede_locatiekaart_versions_for_position_ids(
+                    _position_ids_for_scope('kast', id)
+                )
+        elif type == 'ruimte_type':
+            item = get_scoped_item(Ruimte_Type, id, bedrijf_id)
+            if not item:
+                flash('Kamertype niet gevonden of geen toegang.', 'warning')
+                return redirect(request.referrer or url_for('beheer_infra'))
+            changed = (
+                getattr(item, 'naam', None) != request.form.get('naam')
+                or getattr(item, 'kleur_hex', None) != request.form.get('kleur')
+            )
+            item.naam = request.form.get('naam')
+            item.kleur_hex = request.form.get('kleur')
+            if changed:
+                _supersede_locatiekaart_versions_for_position_ids(
+                    _position_ids_for_scope('ruimte_type', id)
+                )
+        else:
+            flash('Onbekend itemtype.', 'warning')
+            return redirect(request.referrer or url_for('beheer_infra'))
+
+        db.session.commit()
+        flash('Bijgewerkt.', 'success')
+    except Exception as exc:
+        db.session.rollback()
+        flash(f'Kan niet bijwerken: {exc}', 'danger')
     return redirect(request.referrer or url_for('dashboard'))
 
 if __name__ == '__main__':

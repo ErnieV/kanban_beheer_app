@@ -100,6 +100,7 @@ def test_new_article_is_created_with_the_new_default_standard(app_module, monkey
 def test_position_edit_is_a_user_facing_flask_flow_for_independent_overrides(
     app_module, monkeypatch
 ):
+    superseded_position_ids = []
     position = SimpleNamespace(
         voorraad_positie_id=12,
         bedrijf_id=1,
@@ -140,6 +141,11 @@ def test_position_edit_is_a_user_facing_flask_flow_for_independent_overrides(
     monkeypatch.setattr(app_module, "check_db", lambda: True)
     monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
     monkeypatch.setattr(app_module, "get_scoped_item", scoped_item)
+    monkeypatch.setattr(
+        app_module,
+        "_supersede_locatiekaart_versions_for_position_ids",
+        lambda position_ids: superseded_position_ids.extend(position_ids),
+    )
     monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
 
     response = _csrf_client(app_module).post(
@@ -155,6 +161,59 @@ def test_position_edit_is_a_user_facing_flask_flow_for_independent_overrides(
     assert response.status_code == 302
     assert position.kanban_min_override == 5
     assert position.kanban_refill_quantity_override == 2
+    assert superseded_position_ids == [12]
+
+
+def test_storage_location_rename_supersedes_location_card_versions(
+    app_module,
+    monkeypatch,
+):
+    storage_location = SimpleNamespace(
+        kast_id=4,
+        bedrijf_id=1,
+        naam="Kast A",
+        type_opslag="GRIJP",
+    )
+    superseded_position_ids = []
+
+    class FakeSession:
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "get_scoped_item",
+        lambda *args: storage_location,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_position_ids_for_scope",
+        lambda scope, item_id: [12],
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_supersede_locatiekaart_versions_for_position_ids",
+        lambda position_ids: superseded_position_ids.extend(position_ids),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/beheer/update/kast/4",
+        data={
+            "_csrf_token": "test-csrf",
+            "naam": "Kast B",
+            "type_opslag": "GRIJP",
+        },
+    )
+
+    assert response.status_code == 302
+    assert storage_location.naam == "Kast B"
+    assert superseded_position_ids == [12]
 
 
 def test_new_position_defaults_to_kanban_material(app_module, monkeypatch):

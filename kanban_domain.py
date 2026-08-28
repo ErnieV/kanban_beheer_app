@@ -6,6 +6,8 @@ quantity, optionally overridden per inventory position.
 
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
+import json
 import re
 
 
@@ -16,6 +18,13 @@ class KanbanSettingsError(ValueError):
 class Materiaaltype(str, Enum):
     KANBAN = "KANBAN"
     STANDAARD = "STANDAARD"
+
+
+class LocatiekaartStatus(str, Enum):
+    PENDING_PRINT = "PENDING_PRINT"
+    PRINTED = "PRINTED"
+    CANCELLED = "CANCELLED"
+    SUPERSEDED = "SUPERSEDED"
 
 
 DEFAULT_MIN_LEVEL = 1
@@ -105,6 +114,63 @@ def normalize_material_type(value):
     if normalized in {Materiaaltype.STANDAARD.value, "STANDARD"}:
         return Materiaaltype.STANDAARD
     raise KanbanSettingsError(f"Onbekend materiaaltype: {value}.")
+
+
+@dataclass(frozen=True)
+class LocatiekaartInhoud:
+    """Immutable snapshot of the content that identifies a storage location."""
+
+    artikelnaam: str
+    artikel_foto_url: str | None
+    bedrijfslogo_url: str | None
+    vestiging_naam: str
+    ruimte_naam: str
+    opslaglocatie_naam: str
+    kamertype_naam: str | None
+    kamertype_kleur: str | None
+    materiaaltype: Materiaaltype
+    min_level: int | None
+    refill_quantity: int | None
+
+    def __post_init__(self):
+        material_type = normalize_material_type(self.materiaaltype)
+        object.__setattr__(self, "materiaaltype", material_type)
+        if material_type is Materiaaltype.STANDAARD:
+            if self.min_level is not None or self.refill_quantity is not None:
+                raise KanbanSettingsError(
+                    "Standaard materiaal kan geen Kanban-instellingen bevatten."
+                )
+            return
+
+        settings = KanbanStandard.from_values(
+            self.min_level,
+            self.refill_quantity,
+        )
+        object.__setattr__(self, "min_level", settings.min_level)
+        object.__setattr__(self, "refill_quantity", settings.refill_quantity)
+
+    @property
+    def fingerprint(self):
+        values = {
+            "artikelnaam": self.artikelnaam,
+            "artikel_foto_url": self.artikel_foto_url,
+            "bedrijfslogo_url": self.bedrijfslogo_url,
+            "vestiging_naam": self.vestiging_naam,
+            "ruimte_naam": self.ruimte_naam,
+            "opslaglocatie_naam": self.opslaglocatie_naam,
+            "kamertype_naam": self.kamertype_naam,
+            "kamertype_kleur": self.kamertype_kleur,
+            "materiaaltype": self.materiaaltype.value,
+            "min_level": self.min_level,
+            "refill_quantity": self.refill_quantity,
+        }
+        encoded = json.dumps(
+            values,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
 
 def normalized_position_overrides(
