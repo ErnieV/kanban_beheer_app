@@ -322,6 +322,40 @@ def test_location_card_contract_rejects_invalid_batch_and_response_metadata(
     assert metadata is None
 
 
+def test_location_card_contract_surfaces_printservice_error_detail(
+    app_module,
+    monkeypatch,
+):
+    class FakeResponse:
+        status_code = 409
+        headers = {}
+
+        def raise_for_status(self):
+            raise app_module.requests.HTTPError("409 Client Error")
+
+        def json(self):
+            return {
+                "detail": "printBatchId 'batch-1' was already used with different content.",
+            }
+
+    monkeypatch.setattr(app_module, "PRINT_SERVICE_URL", "http://print.test")
+    monkeypatch.setattr(app_module, "PRINT_SERVICE_REQUIRE_API_KEY", False)
+    monkeypatch.setattr(
+        app_module.requests,
+        "post",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    sent, error, metadata = app_module.send_location_cards_to_print_service(
+        [_location_card_version()],
+        print_batch_id="batch-1",
+    )
+
+    assert sent is False
+    assert error == "printBatchId 'batch-1' was already used with different content."
+    assert metadata is None
+
+
 def test_location_card_contract_reports_printservice_http_errors(
     app_module,
     monkeypatch,

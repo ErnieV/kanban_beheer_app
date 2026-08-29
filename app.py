@@ -1572,7 +1572,21 @@ def send_location_cards_to_print_service(versions, print_batch_id=None):
                 "Controleer PRINT_SERVICE_URL."
             ), None
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            # FastAPI error responses carry {"detail": "..."} — prefer that
+            # over the generic HTTPError text so a conflict or validation
+            # failure is actually actionable for the operator.
+            detail = None
+            try:
+                error_body = response.json()
+                if isinstance(error_body, dict):
+                    detail = error_body.get('detail')
+            except (ValueError, AttributeError):
+                detail = None
+            return False, detail or f"Printservice fout: {exc}", None
+
         response_body = response.json()
         metadata = _location_card_response_metadata(response_body, payload)
         return True, None, metadata
