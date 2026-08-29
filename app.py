@@ -1442,6 +1442,7 @@ def build_location_cards_payload(versions, print_batch_id=None):
             getattr(version, 'materiaaltype', None),
         )
         card = {
+            "cardId": str(getattr(version, 'locatiekaart_versie_id', '') or ''),
             "product": {
                 "name": article_name,
                 "image": product_image,
@@ -1866,6 +1867,65 @@ def _print_selection_label(kaart_type, singular=False):
     return 'Locatiekaartje' if singular else 'Locatiekaartjes'
 
 
+def _resolve_locatie_print_batch_id(selected_ids):
+    """Reuse the submitted printBatchId only when retrying the same selection.
+
+    A changed selection always gets a fresh batch id, so a stale retry can't
+    be silently deduped by the print service against different content.
+    """
+    current_selection = ','.join(str(position_id) for position_id in sorted(selected_ids))
+    submitted_batch_id = request.form.get('printBatchId', '').strip()
+    submitted_selection = request.form.get('printBatchSelection', '')
+    if submitted_batch_id and submitted_selection == current_selection:
+        return submitted_batch_id, current_selection
+    return str(uuid.uuid4()), current_selection
+
+
+def _send_locatiekaart_batch(location_versions, print_batch_id):
+    """Send a Locatiekaart batch to the A4 print service and mark accepted
+    versions PRINTED.
+
+    Cards whose photo or logo can't be resolved are excluded per-article
+    instead of failing the whole batch. Returns (sent, error, metadata,
+    skipped), where skipped is a list of (artikelnaam, reason) tuples.
+    """
+    printable_versions = []
+    skipped = []
+    for version in location_versions:
+        label = getattr(version, 'artikelnaam', None) or 'Onbekend Artikel'
+        _, product_image_error = _image_to_base64_object(
+            getattr(version, 'artikel_foto_url', None),
+            "Artikel-foto",
+        )
+        if product_image_error:
+            skipped.append((label, product_image_error))
+            continue
+        _, company_logo_error = _image_to_base64_object(
+            getattr(version, 'bedrijfslogo_url', None),
+            "Bedrijfslogo",
+        )
+        if company_logo_error:
+            skipped.append((label, company_logo_error))
+            continue
+        printable_versions.append(version)
+
+    if not printable_versions:
+        reasons = '; '.join(f'{name} ({reason})' for name, reason in skipped)
+        return False, f'Geen enkele kaart is printbaar. {reasons}', None, skipped
+
+    sent, error, metadata = send_location_cards_to_print_service(
+        printable_versions,
+        print_batch_id,
+    )
+    if not sent:
+        return False, error, None, skipped
+
+    for version in printable_versions:
+        mark_locatiekaart_version_printed(version)
+    db.session.commit()
+    return True, None, metadata, skipped
+
+
 @app.route('/assistent/kast/<int:kast_id>')
 def assistent_kast_inhoud(kast_id):
     if not check_db():
@@ -2039,7 +2099,8 @@ def kast_print_selectie(kast_id, kaart_type):
     applicable_items = [item for item in selection_items if item['applicable']]
     valid_items = [item for item in applicable_items if item['valid']]
     selected_ids = None
-    print_batch_id = request.form.get('printBatchId', '') if request.method == 'POST' else ''
+    print_batch_id = ''
+    print_batch_selection = ''
 
     if request.method == 'POST':
         selected_ids = {
@@ -2051,6 +2112,10 @@ def kast_print_selectie(kast_id, kaart_type):
             item for item in valid_items
             if item['position_id'] in selected_ids
         ]
+        if kaart_type == 'locatie':
+            print_batch_id, print_batch_selection = _resolve_locatie_print_batch_id(
+                selected_ids,
+            )
         if not selected_items:
             flash('Selecteer minimaal één geldig Artikel om te printen.', 'warning')
             return render_template(
@@ -2063,6 +2128,7 @@ def kast_print_selectie(kast_id, kaart_type):
                 valid_count=len(valid_items),
                 selected_ids=set(),
                 print_batch_id=print_batch_id,
+                print_batch_selection=print_batch_selection,
             )
 
         try:
@@ -2087,9 +2153,7 @@ def kast_print_selectie(kast_id, kaart_type):
             # Persist pending versions before calling the external service so a
             # failed request can be retried without losing the snapshot.
             db.session.commit()
-            if not print_batch_id:
-                print_batch_id = str(uuid.uuid4())
-            sent, error, metadata = send_location_cards_to_print_service(
+            sent, error, metadata, skipped = _send_locatiekaart_batch(
                 location_versions,
                 print_batch_id,
             )
@@ -2105,11 +2169,15 @@ def kast_print_selectie(kast_id, kaart_type):
                     valid_count=len(valid_items),
                     selected_ids=selected_ids,
                     print_batch_id=print_batch_id,
+                    print_batch_selection=print_batch_selection,
                 )
 
-            for version in location_versions:
-                mark_locatiekaart_version_printed(version)
-            db.session.commit()
+            if skipped:
+                flash(
+                    f'{len(skipped)} kaartje(s) overgeslagen: '
+                    + '; '.join(f'{name} ({reason})' for name, reason in skipped),
+                    'warning',
+                )
             flash(
                 f'A4-printbatch {metadata["printBatchId"]} geaccepteerd: '
                 f'{metadata["cardCount"]} kaartje(s), '
@@ -2136,6 +2204,7 @@ def kast_print_selectie(kast_id, kaart_type):
         valid_count=len(valid_items),
         selected_ids=selected_ids,
         print_batch_id=print_batch_id,
+        print_batch_selection=print_batch_selection,
     )
 
 
@@ -2162,7 +2231,8 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
     applicable_items = [item for item in selection_items if item['applicable']]
     valid_items = [item for item in applicable_items if item['valid']]
     selected_ids = None
-    print_batch_id = request.form.get('printBatchId', '') if request.method == 'POST' else ''
+    print_batch_id = ''
+    print_batch_selection = ''
 
     if request.method == 'POST':
         selected_ids = {
@@ -2174,6 +2244,10 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
             item for item in valid_items
             if item['position_id'] in selected_ids
         ]
+        if kaart_type == 'locatie':
+            print_batch_id, print_batch_selection = _resolve_locatie_print_batch_id(
+                selected_ids,
+            )
         if not selected_items:
             flash('Selecteer minimaal één geldig Artikel om te printen.', 'warning')
             return render_template(
@@ -2186,6 +2260,7 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
                 valid_count=len(valid_items),
                 selected_ids=set(),
                 print_batch_id=print_batch_id,
+                print_batch_selection=print_batch_selection,
             )
 
         try:
@@ -2208,10 +2283,10 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
                 version, _ = create_or_reuse_locatiekaart_version(*row)
                 location_versions.append(version)
 
+            # Persist pending versions before calling the external service so a
+            # failed request can be retried without losing the snapshot.
             db.session.commit()
-            if not print_batch_id:
-                print_batch_id = str(uuid.uuid4())
-            sent, error, metadata = send_location_cards_to_print_service(
+            sent, error, metadata, skipped = _send_locatiekaart_batch(
                 location_versions,
                 print_batch_id,
             )
@@ -2227,11 +2302,15 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
                     valid_count=len(valid_items),
                     selected_ids=selected_ids,
                     print_batch_id=print_batch_id,
+                    print_batch_selection=print_batch_selection,
                 )
 
-            for version in location_versions:
-                mark_locatiekaart_version_printed(version)
-            db.session.commit()
+            if skipped:
+                flash(
+                    f'{len(skipped)} kaartje(s) overgeslagen: '
+                    + '; '.join(f'{name} ({reason})' for name, reason in skipped),
+                    'warning',
+                )
             flash(
                 f'A4-printbatch {metadata["printBatchId"]} geaccepteerd: '
                 f'{metadata["cardCount"]} kaartje(s), '
@@ -2258,6 +2337,7 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
         valid_count=len(valid_items),
         selected_ids=selected_ids,
         print_batch_id=print_batch_id,
+        print_batch_selection=print_batch_selection,
     )
 
 

@@ -66,6 +66,7 @@ def test_location_card_contract_builds_a4_batch_without_layout_coordinates_or_ma
         "duplexFlip": "long-edge",
     }
     assert payload["cards"][0] == {
+        "cardId": "1",
         "product": {
             "name": "Verband",
             "image": {"base64Data": "data:image/png;base64,QUJD"},
@@ -85,6 +86,7 @@ def test_location_card_contract_builds_a4_batch_without_layout_coordinates_or_ma
             "color": "#123456",
         },
     }
+    assert payload["cards"][1]["cardId"] == "2"
     assert payload["cards"][1]["materialType"] == "STANDAARD"
     assert "logistics" not in payload["cards"][1]
     assert "maxLevel" not in str(payload)

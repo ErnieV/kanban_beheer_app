@@ -30,6 +30,7 @@
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     {% if kaart_type == 'locatie' %}
     <input type="hidden" name="printBatchId" value="{{ print_batch_id or '' }}">
+    <input type="hidden" name="printBatchSelection" value="{{ print_batch_selection or '' }}">
     {% endif %}
     <div class="card shadow-sm border-0 mb-4">
         <div class="list-group list-group-flush">

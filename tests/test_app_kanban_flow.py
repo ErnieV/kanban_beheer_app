@@ -541,6 +541,9 @@ def test_location_print_selection_creates_only_selected_location_versions(
         status="PENDING_PRINT",
         printed_at=None,
         cancelled_at=None,
+        artikelnaam="Naaldencontainer",
+        artikel_foto_url="data:image/png;base64,QUJD",
+        bedrijfslogo_url="data:image/png;base64,REVG",
     )
 
     class FakeQuery:
@@ -802,6 +805,9 @@ def test_room_location_print_selection_processes_selected_standard_and_kanban(
             status="PENDING_PRINT",
             printed_at=None,
             cancelled_at=None,
+            artikelnaam=row[1].eigen_naam,
+            artikel_foto_url="data:image/png;base64,QUJD",
+            bedrijfslogo_url="data:image/png;base64,REVG",
         )
         for row in rows
     }
@@ -986,35 +992,52 @@ def test_room_page_exposes_independent_print_actions_with_counts(
     assert "/assistent/kamer/9/print/locatie" in html
 
 
-def test_storage_location_location_print_marks_versions_printed_after_acceptance(
-    app_module,
-    monkeypatch,
-):
+def _two_item_kast_fixture():
     kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
     room = SimpleNamespace(naam="Behandelkamer", nummer=None)
     room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
-    position = SimpleNamespace(
-        voorraad_positie_id=13,
-        lokaal_artikel_id=8,
-        materiaaltype="STANDAARD",
-        kanban_min_override=None,
-        kanban_refill_quantity_override=None,
-        locatie_foto_url=None,
-    )
-    article = SimpleNamespace(
-        lokaal_artikel_id=8,
-        eigen_naam="Naaldencontainer",
-        foto_url="standard.png",
-        verpakkingseenheid_tekst="stuk",
-        kanban_min=3,
-        kanban_refill_quantity=4,
-    )
-    row = (position, article, None, kast, room, room_type, company)
+
+    def position(position_id):
+        return SimpleNamespace(
+            voorraad_positie_id=position_id,
+            lokaal_artikel_id=position_id,
+            materiaaltype="STANDAARD",
+            kanban_min_override=None,
+            kanban_refill_quantity_override=None,
+            locatie_foto_url=None,
+        )
+
+    def article(position_id, name):
+        return SimpleNamespace(
+            lokaal_artikel_id=position_id,
+            eigen_naam=name,
+            foto_url="standard.png",
+            verpakkingseenheid_tekst="stuk",
+            kanban_min=3,
+            kanban_refill_quantity=4,
+        )
+
+    rows = [
+        (position(13), article(13, "Naaldencontainer"), None, kast, room, room_type, company),
+        (position(14), article(14, "Pulseoximeter"), None, kast, room, room_type, company),
+    ]
+    return kast, rows
+
+
+def test_storage_location_location_print_marks_versions_printed_after_acceptance(
+    app_module,
+    monkeypatch,
+):
+    kast, rows = _two_item_kast_fixture()
+    row = rows[0]
     version = SimpleNamespace(
         status="PENDING_PRINT",
         printed_at=None,
         cancelled_at=None,
+        artikelnaam="Naaldencontainer",
+        artikel_foto_url="data:image/png;base64,QUJD",
+        bedrijfslogo_url="data:image/png;base64,REVG",
     )
     created = []
     sent = []
@@ -1064,6 +1087,7 @@ def test_storage_location_location_print_marks_versions_printed_after_acceptance
             "_csrf_token": "test-csrf",
             "position_ids": ["13"],
             "printBatchId": "batch-1",
+            "printBatchSelection": "13",
         },
     )
 
@@ -1079,31 +1103,15 @@ def test_storage_location_location_print_keeps_pending_on_service_failure(
     app_module,
     monkeypatch,
 ):
-    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
-    room = SimpleNamespace(naam="Behandelkamer", nummer=None)
-    room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
-    company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
-    position = SimpleNamespace(
-        voorraad_positie_id=13,
-        lokaal_artikel_id=8,
-        materiaaltype="STANDAARD",
-        kanban_min_override=None,
-        kanban_refill_quantity_override=None,
-        locatie_foto_url=None,
-    )
-    article = SimpleNamespace(
-        lokaal_artikel_id=8,
-        eigen_naam="Naaldencontainer",
-        foto_url="standard.png",
-        verpakkingseenheid_tekst="stuk",
-        kanban_min=3,
-        kanban_refill_quantity=4,
-    )
-    row = (position, article, None, kast, room, room_type, company)
+    kast, rows = _two_item_kast_fixture()
+    row = rows[0]
     version = SimpleNamespace(
         status="PENDING_PRINT",
         printed_at=None,
         cancelled_at=None,
+        artikelnaam="Naaldencontainer",
+        artikel_foto_url="data:image/png;base64,QUJD",
+        bedrijfslogo_url="data:image/png;base64,REVG",
     )
     commits = []
 
@@ -1140,6 +1148,7 @@ def test_storage_location_location_print_keeps_pending_on_service_failure(
             "_csrf_token": "test-csrf",
             "position_ids": ["13"],
             "printBatchId": "retry-batch",
+            "printBatchSelection": "13",
         },
     )
 
@@ -1148,7 +1157,223 @@ def test_storage_location_location_print_keeps_pending_on_service_failure(
     assert "A4-service offline" in html
     assert version.status == "PENDING_PRINT"
     assert 'name="printBatchId" value="retry-batch"' in html
+    assert 'name="printBatchSelection" value="13"' in html
     assert len(commits) == 1
+
+
+def test_storage_location_location_print_skips_articles_with_unresolvable_images_but_prints_rest(
+    app_module,
+    monkeypatch,
+):
+    kast, rows = _two_item_kast_fixture()
+    versions = {
+        13: SimpleNamespace(
+            status="PENDING_PRINT",
+            printed_at=None,
+            cancelled_at=None,
+            artikelnaam="Naaldencontainer",
+            artikel_foto_url="data:image/png;base64,QUJD",
+            bedrijfslogo_url="data:image/png;base64,REVG",
+        ),
+        14: SimpleNamespace(
+            status="PENDING_PRINT",
+            printed_at=None,
+            cancelled_at=None,
+            artikelnaam="Pulseoximeter",
+            artikel_foto_url=None,
+            bedrijfslogo_url="data:image/png;base64,REVG",
+        ),
+    }
+    sent = []
+    commits = []
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    class FakeSession:
+        def commit(self):
+            commits.append(True)
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(
+        app_module,
+        "create_or_reuse_locatiekaart_version",
+        lambda *source_row: (versions[source_row[0].voorraad_positie_id], True),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda selected_versions, print_batch_id: sent.append(
+            (selected_versions, print_batch_id)
+        ) or (
+            True,
+            None,
+            {
+                "printBatchId": print_batch_id,
+                "jobId": "job-3",
+                "status": "ACCEPTED",
+                "cardCount": len(selected_versions),
+                "sheetCount": 1,
+            },
+        ),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/kast/4/print/locatie",
+        data={
+            "_csrf_token": "test-csrf",
+            "position_ids": ["13", "14"],
+        },
+    )
+
+    assert response.status_code == 302
+    assert len(sent) == 1
+    assert sent[0][0] == [versions[13]]
+    assert versions[13].status == "PRINTED"
+    assert versions[14].status == "PENDING_PRINT"
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "1 kaartje(s) overgeslagen" in flash_messages
+    assert "Pulseoximeter" in flash_messages
+
+
+def test_storage_location_location_print_fails_when_all_selected_cards_are_unprintable(
+    app_module,
+    monkeypatch,
+):
+    kast, rows = _two_item_kast_fixture()
+    version = SimpleNamespace(
+        status="PENDING_PRINT",
+        printed_at=None,
+        cancelled_at=None,
+        artikelnaam="Naaldencontainer",
+        artikel_foto_url=None,
+        bedrijfslogo_url="data:image/png;base64,REVG",
+    )
+    send_calls = []
+    commits = []
+
+    class FakeQuery:
+        def all(self):
+            return rows[:1]
+
+    class FakeSession:
+        def commit(self):
+            commits.append(True)
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(
+        app_module,
+        "create_or_reuse_locatiekaart_version",
+        lambda *source_row: (version, True),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda *args, **kwargs: send_calls.append(True),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kast/4/print/locatie",
+        data={
+            "_csrf_token": "test-csrf",
+            "position_ids": ["13"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert send_calls == []
+    assert version.status == "PENDING_PRINT"
+    html = response.get_data(as_text=True)
+    assert "Geen enkele kaart is printbaar" in html
+
+
+def test_storage_location_location_print_mints_new_batch_id_when_retry_selection_changes(
+    app_module,
+    monkeypatch,
+):
+    kast, rows = _two_item_kast_fixture()
+    versions = {
+        13: SimpleNamespace(
+            status="PENDING_PRINT",
+            printed_at=None,
+            cancelled_at=None,
+            artikelnaam="Naaldencontainer",
+            artikel_foto_url="data:image/png;base64,QUJD",
+            bedrijfslogo_url="data:image/png;base64,REVG",
+        ),
+    }
+    captured_batch_ids = []
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    class FakeSession:
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(
+        app_module,
+        "create_or_reuse_locatiekaart_version",
+        lambda *source_row: (versions[source_row[0].voorraad_positie_id], True),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda selected_versions, print_batch_id: captured_batch_ids.append(
+            print_batch_id
+        ) or (
+            True,
+            None,
+            {
+                "printBatchId": print_batch_id,
+                "jobId": "job-4",
+                "status": "ACCEPTED",
+                "cardCount": len(selected_versions),
+                "sheetCount": 1,
+            },
+        ),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kast/4/print/locatie",
+        data={
+            "_csrf_token": "test-csrf",
+            "position_ids": ["13"],
+            "printBatchId": "stale-batch",
+            "printBatchSelection": "13,14",
+        },
+    )
+
+    assert response.status_code == 302
+    assert captured_batch_ids == [captured_batch_ids[0]]
+    assert captured_batch_ids[0] != "stale-batch"
 
 
 class _CatalogQuery:
