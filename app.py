@@ -1847,22 +1847,15 @@ def _storage_location_print_item(row, kaart_type):
     }
 
 
-def _kast_print_selection_items(rows, kaart_type):
-    items = [
-        _storage_location_print_item(row, kaart_type)
-        for row in rows
-    ]
-    items = [item for item in items if item['applicable']]
-    return sorted(
-        items,
-        key=lambda item: (
-            item['display_name'].casefold(),
-            item['position_id'],
-        ),
-    )
+def _print_selection_items(rows, kaart_type):
+    """Build the selectable rows for the print-selection screen.
 
-
-def _ruimte_print_selection_items(rows, kaart_type):
+    Shared by both scopes (ticket #24): a single Opslaglocatie's rows sort
+    identically whether or not storage_location_name is included as the
+    leading sort key, since it's constant across them — so one sort order
+    serves both the Ruimte-wide and Opslaglocatie-specific screen, and also
+    gives the grouping-by-Opslaglocatie the caller needs for free.
+    """
     items = [
         _storage_location_print_item(row, kaart_type)
         for row in rows
@@ -1876,6 +1869,20 @@ def _ruimte_print_selection_items(rows, kaart_type):
             item['position_id'],
         ),
     )
+
+
+def _group_selection_items_by_location(selection_items):
+    """Group already-sorted selection items into
+    [(storage_location_name, [item, ...]), ...] for the print-selection
+    screen (ticket #24, AC: 'gegroepeerd per Opslaglocatie').
+    """
+    groups = []
+    for item in selection_items:
+        if groups and groups[-1][0] == item['storage_location_name']:
+            groups[-1][1].append(item)
+        else:
+            groups.append((item['storage_location_name'], [item]))
+    return groups
 
 
 def _print_selection_label(kaart_type, singular=False):
@@ -2101,27 +2108,56 @@ def add_to_kast_from_room(kast_id):
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
 
-@app.route('/assistent/kast/<int:kast_id>/print/<kaart_type>', methods=['GET', 'POST'])
-def kast_print_selectie(kast_id, kaart_type):
+@app.route(
+    '/assistent/kast/<int:kast_id>/print/<kaart_type>',
+    methods=['GET', 'POST'],
+    endpoint='kast_print_selectie',
+)
+@app.route(
+    '/assistent/kamer/<int:ruimte_id>/print/<kaart_type>',
+    methods=['GET', 'POST'],
+    endpoint='ruimte_print_selectie',
+)
+def print_selectie(kaart_type, kast_id=None, ruimte_id=None):
+    """Shared print-selection screen for both scopes (ticket #24): identical
+    behaviour and markup for 'print for this whole Ruimte' and 'print for
+    this one Opslaglocatie'. Registered under two endpoint names so existing
+    url_for('kast_print_selectie', ...) / url_for('ruimte_print_selectie',
+    ...) calls elsewhere keep working unchanged.
+    """
     if not check_db():
         return redirect(url_for('dashboard'))
     if kaart_type not in {'kanban', 'locatie'}:
         flash('Onbekend kaarttype.', 'warning')
         return redirect(url_for('assistent_kamers'))
-    kaart_type_label = (
-        'Kanban-kaartjes'
-        if kaart_type == 'kanban'
-        else 'Locatiekaartjes'
-    )
 
     bedrijf_id = get_huidig_bedrijf_id()
-    kast = get_scoped_item(Kast, kast_id, bedrijf_id)
-    if not kast:
-        flash('Opslaglocatie niet gevonden of geen toegang.', 'warning')
-        return redirect(url_for('assistent_kamers'))
 
-    rows = _kast_inventory_query(kast_id, bedrijf_id).all()
-    selection_items = _kast_print_selection_items(rows, kaart_type)
+    if kast_id is not None:
+        kast = get_scoped_item(Kast, kast_id, bedrijf_id)
+        if not kast:
+            flash('Opslaglocatie niet gevonden of geen toegang.', 'warning')
+            return redirect(url_for('assistent_kamers'))
+        scope_label = 'Opslaglocatie'
+        scope_name = kast.naam
+        target_ruimte_id = kast.ruimte_id
+        rows = _kast_inventory_query(kast_id, bedrijf_id).all()
+        back_url = url_for(
+            'assistent_kamer_view', ruimte_id=kast.ruimte_id, open_kast=kast_id,
+        )
+    else:
+        ruimte = get_scoped_item(Ruimte, ruimte_id, bedrijf_id)
+        if not ruimte:
+            flash('Ruimte niet gevonden of geen toegang.', 'warning')
+            return redirect(url_for('assistent_kamers'))
+        scope_label = 'Ruimte'
+        scope_name = ruimte.naam
+        target_ruimte_id = ruimte_id
+        rows = _ruimte_inventory_query(ruimte_id, bedrijf_id).all()
+        back_url = url_for('assistent_kamer_view', ruimte_id=ruimte_id)
+
+    kaart_type_label = _print_selection_label(kaart_type)
+    selection_items = _print_selection_items(rows, kaart_type)
     rows_by_position_id = {
         row[0].voorraad_positie_id: row
         for row in rows
@@ -2131,6 +2167,22 @@ def kast_print_selectie(kast_id, kaart_type):
     selected_ids = None
     print_batch_id = ''
     print_batch_selection = ''
+
+    def render(selected_ids):
+        return render_template(
+            'print_selectie.html',
+            scope_label=scope_label,
+            scope_name=scope_name,
+            back_url=back_url,
+            kaart_type=kaart_type,
+            kaart_type_label=kaart_type_label,
+            selection_groups=_group_selection_items_by_location(selection_items),
+            applicable_count=len(applicable_items),
+            valid_count=len(valid_items),
+            selected_ids=selected_ids,
+            print_batch_id=print_batch_id,
+            print_batch_selection=print_batch_selection,
+        )
 
     if request.method == 'POST':
         selected_ids = {
@@ -2148,152 +2200,14 @@ def kast_print_selectie(kast_id, kaart_type):
             )
         if not selected_items:
             flash('Selecteer minimaal één geldig Artikel om te printen.', 'warning')
-            return render_template(
-                'kast_print_selectie.html',
-                kast=kast,
-                kaart_type=kaart_type,
-                kaart_type_label=kaart_type_label,
-                selection_items=selection_items,
-                applicable_count=len(applicable_items),
-                valid_count=len(valid_items),
-                selected_ids=set(),
-                print_batch_id=print_batch_id,
-                print_batch_selection=print_batch_selection,
-            )
-
-        try:
-            if kaart_type == 'kanban':
-                for item in selected_items:
-                    row = rows_by_position_id[item['position_id']]
-                    # row's trailing Vestiging is only needed by
-                    # create_or_reuse_locatiekaart_version below.
-                    db.session.add(create_queue_item(*row[:7]))
-                db.session.commit()
-                flash(
-                    f'{len(selected_items)} Kanban-kaartje'
-                    f'{"s" if len(selected_items) != 1 else ""} aangevraagd.',
-                    'success',
-                )
-                return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
-
-            location_versions = []
-            for item in selected_items:
-                row = rows_by_position_id[item['position_id']]
-                version, _ = create_or_reuse_locatiekaart_version(*row)
-                location_versions.append(version)
-
-            # Persist pending versions before calling the external service so a
-            # failed request can be retried without losing the snapshot.
-            db.session.commit()
-            sent, error, metadata, skipped = _send_locatiekaart_batch(
-                location_versions,
-                print_batch_id,
-            )
-            if not sent:
-                flash(f'A4-printaanvraag mislukt: {error}', 'danger')
-                return render_template(
-                    'kast_print_selectie.html',
-                    kast=kast,
-                    kaart_type=kaart_type,
-                    kaart_type_label=kaart_type_label,
-                    selection_items=selection_items,
-                    applicable_count=len(applicable_items),
-                    valid_count=len(valid_items),
-                    selected_ids=selected_ids,
-                    print_batch_id=print_batch_id,
-                    print_batch_selection=print_batch_selection,
-                )
-
-            if skipped:
-                flash(
-                    f'{len(skipped)} kaartje(s) overgeslagen: '
-                    + '; '.join(f'{name} ({reason})' for name, reason in skipped),
-                    'warning',
-                )
-            flash(
-                f'A4-printbatch {metadata["printBatchId"]} geaccepteerd: '
-                f'{metadata["cardCount"]} kaartje(s), '
-                f'{metadata["sheetCount"]} vel(len), job {metadata["jobId"]}.',
-                'success',
-            )
-            return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
-        except Exception as exc:
-            db.session.rollback()
-            flash(f'Fout bij printaanvraag: {exc}', 'danger')
-
-    if selected_ids is None:
-        selected_ids = {
-            item['position_id']
-            for item in valid_items
-        }
-    return render_template(
-        'kast_print_selectie.html',
-        kast=kast,
-        kaart_type=kaart_type,
-        kaart_type_label=kaart_type_label,
-        selection_items=selection_items,
-        applicable_count=len(applicable_items),
-        valid_count=len(valid_items),
-        selected_ids=selected_ids,
-        print_batch_id=print_batch_id,
-        print_batch_selection=print_batch_selection,
-    )
-
-
-@app.route('/assistent/kamer/<int:ruimte_id>/print/<kaart_type>', methods=['GET', 'POST'])
-def ruimte_print_selectie(ruimte_id, kaart_type):
-    if not check_db():
-        return redirect(url_for('dashboard'))
-    if kaart_type not in {'kanban', 'locatie'}:
-        flash('Onbekend kaarttype.', 'warning')
-        return redirect(url_for('assistent_kamers'))
-
-    bedrijf_id = get_huidig_bedrijf_id()
-    ruimte = get_scoped_item(Ruimte, ruimte_id, bedrijf_id)
-    if not ruimte:
-        flash('Ruimte niet gevonden of geen toegang.', 'warning')
-        return redirect(url_for('assistent_kamers'))
-
-    rows = _ruimte_inventory_query(ruimte_id, bedrijf_id).all()
-    selection_items = _ruimte_print_selection_items(rows, kaart_type)
-    rows_by_position_id = {
-        row[0].voorraad_positie_id: row
-        for row in rows
-    }
-    applicable_items = [item for item in selection_items if item['applicable']]
-    valid_items = [item for item in applicable_items if item['valid']]
-    selected_ids = None
-    print_batch_id = ''
-    print_batch_selection = ''
-
-    if request.method == 'POST':
-        selected_ids = {
-            int(value)
-            for value in request.form.getlist('position_ids')
-            if value.isdigit()
-        }
-        selected_items = [
-            item for item in valid_items
-            if item['position_id'] in selected_ids
-        ]
-        if kaart_type == 'locatie':
-            print_batch_id, print_batch_selection = _resolve_locatie_print_batch_id(
-                selected_ids,
-            )
-        if not selected_items:
-            flash('Selecteer minimaal één geldig Artikel om te printen.', 'warning')
-            return render_template(
-                'kamer_print_selectie.html',
-                ruimte=ruimte,
-                kaart_type=kaart_type,
-                kaart_type_label=_print_selection_label(kaart_type),
-                selection_items=selection_items,
-                applicable_count=len(applicable_items),
-                valid_count=len(valid_items),
-                selected_ids=set(),
-                print_batch_id=print_batch_id,
-                print_batch_selection=print_batch_selection,
-            )
+            # Re-render with whatever was actually submitted (selected_ids),
+            # never a hardcoded empty set: if the submission genuinely
+            # contained no ids, this is a no-op (there was nothing to
+            # preserve); but if it contained ids that turned out invalid —
+            # e.g. an item became unprintable between page load and submit
+            # — the user's checkmarks must survive the re-render instead of
+            # silently vanishing.
+            return render(selected_ids)
 
         try:
             if kaart_type == 'kanban':
@@ -2309,7 +2223,7 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
                     f'{len(selected_items)} {kaartje_label}{kaartje_meervoud} aangevraagd.',
                     'success',
                 )
-                return redirect(url_for('assistent_kamer_view', ruimte_id=ruimte_id))
+                return redirect(url_for('assistent_kamer_view', ruimte_id=target_ruimte_id))
 
             location_versions = []
             for item in selected_items:
@@ -2326,18 +2240,7 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
             )
             if not sent:
                 flash(f'A4-printaanvraag mislukt: {error}', 'danger')
-                return render_template(
-                    'kamer_print_selectie.html',
-                    ruimte=ruimte,
-                    kaart_type=kaart_type,
-                    kaart_type_label=_print_selection_label(kaart_type),
-                    selection_items=selection_items,
-                    applicable_count=len(applicable_items),
-                    valid_count=len(valid_items),
-                    selected_ids=selected_ids,
-                    print_batch_id=print_batch_id,
-                    print_batch_selection=print_batch_selection,
-                )
+                return render(selected_ids)
 
             if skipped:
                 flash(
@@ -2351,28 +2254,20 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
                 f'{metadata["sheetCount"]} vel(len), job {metadata["jobId"]}.',
                 'success',
             )
-            return redirect(url_for('assistent_kamer_view', ruimte_id=ruimte_id))
+            return redirect(url_for('assistent_kamer_view', ruimte_id=target_ruimte_id))
         except Exception as exc:
             db.session.rollback()
             flash(f'Fout bij printaanvraag: {exc}', 'danger')
+            return render(selected_ids)
 
     if selected_ids is None:
         selected_ids = {
             item['position_id']
             for item in valid_items
         }
-    return render_template(
-        'kamer_print_selectie.html',
-        ruimte=ruimte,
-        kaart_type=kaart_type,
-        kaart_type_label=_print_selection_label(kaart_type),
-        selection_items=selection_items,
-        applicable_count=len(applicable_items),
-        valid_count=len(valid_items),
-        selected_ids=selected_ids,
-        print_batch_id=print_batch_id,
-        print_batch_selection=print_batch_selection,
-    )
+    return render(selected_ids)
+
+
 
 
 @app.route('/assistent/kanban/aanvragen/enkel/<int:voorraad_positie_id>', methods=['POST'])

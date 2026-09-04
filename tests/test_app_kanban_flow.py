@@ -602,11 +602,35 @@ def test_location_print_selection_creates_only_selected_location_versions(
     assert version.status == "PRINTED"
 
 
-def test_empty_storage_location_print_selection_has_no_side_effect(
-    app_module,
-    monkeypatch,
+@pytest.mark.parametrize(
+    "scope_url, entity, inventory_query_attr, expected_back_url",
+    [
+        (
+            "/assistent/kast/4/print/kanban",
+            SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Lege kast"),
+            "_kast_inventory_query",
+            "/assistent/kamer/9?open_kast=4",
+        ),
+        (
+            "/assistent/kamer/9/print/kanban",
+            SimpleNamespace(ruimte_id=9, naam="Lege kamer", nummer=None),
+            "_ruimte_inventory_query",
+            "/assistent/kamer/9",
+        ),
+    ],
+    ids=["opslaglocatie-scope", "ruimte-scope"],
+)
+def test_empty_print_selection_has_no_side_effect_for_either_scope(
+    app_module, monkeypatch, scope_url, entity, inventory_query_attr, expected_back_url,
 ):
-    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Lege kast")
+    """Ticket #24: both scopes now share one handler — a genuinely empty
+    submission (0 checkboxes posted, nothing to preserve) must re-render
+    the same warning and change nothing, for either scope identically.
+    This is distinct from test_print_selectie_keeps_submitted_selection_
+    instead_of_wiping_it, which covers a *non-empty* but all-invalid
+    submission — there, prior checkbox state must survive; here, there
+    never was any state to preserve in the first place.
+    """
     commits = []
 
     class FakeQuery:
@@ -622,18 +646,19 @@ def test_empty_storage_location_print_selection_has_no_side_effect(
 
     monkeypatch.setattr(app_module, "check_db", lambda: True)
     monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
-    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: entity)
+    monkeypatch.setattr(app_module, inventory_query_attr, lambda *args: FakeQuery())
     monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
 
     response = _csrf_client(app_module).post(
-        "/assistent/kast/4/print/kanban",
-        data={"_csrf_token": "test-csrf"},
+        scope_url, data={"_csrf_token": "test-csrf"},
     )
+    html = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert "Selecteer minimaal één geldig Artikel" in response.get_data(as_text=True)
-    assert 'id="printSelectionButton" disabled' in response.get_data(as_text=True)
+    assert "Selecteer minimaal één geldig Artikel" in html
+    assert 'id="printSelectionButton" disabled' in html
+    assert expected_back_url in html
     assert commits == []
 
 
@@ -755,6 +780,150 @@ def test_room_print_selection_collects_and_orders_all_storage_locations(
     assert "Aanv." not in html
     assert re.search(r'value="103"\s+checked', html)
     assert re.search(r'value="104"\s+disabled', html)
+
+
+def test_room_print_selection_groups_items_by_storage_location(app_module, monkeypatch):
+    """Ticket #24 AC: kaartjes zijn gegroepeerd per Opslaglocatie."""
+    room, rows = _room_print_rows()
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: room)
+    monkeypatch.setattr(app_module, "_ruimte_inventory_query", lambda *args: FakeQuery())
+
+    response = _csrf_client(app_module).get("/assistent/kamer/9/print/kanban")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Opslaglocatie: Kast A" in html
+    assert "Opslaglocatie: Kast Z" in html
+    assert html.index("Opslaglocatie: Kast A") < html.index("Alpha")
+    assert html.index("Alpha") < html.index("Opslaglocatie: Kast Z")
+    assert html.index("Opslaglocatie: Kast Z") < html.index("Zebra")
+
+
+def test_storage_location_print_selection_has_no_redundant_group_header(
+    app_module, monkeypatch,
+):
+    """A single Opslaglocatie is, by definition, one group — showing its own
+    name again as a group header would just repeat the page subtitle.
+    """
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Kast A")
+    company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    branch = SimpleNamespace(naam="Vestiging")
+    room = SimpleNamespace(naam="Behandelkamer", nummer=None)
+    room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url=None,
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        eigen_naam="Verband",
+        foto_url="article.png",
+        verpakkingseenheid_tekst="doos",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    rows = [(position, article, None, kast, room, room_type, company, branch)]
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+
+    response = _csrf_client(app_module).get("/assistent/kast/4/print/kanban")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Verband" in html
+    assert "Opslaglocatie: Kast A" not in html
+
+
+def test_print_selectie_offers_select_all_toggle_when_items_are_valid(
+    app_module, monkeypatch,
+):
+    room, rows = _room_print_rows()
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: room)
+    monkeypatch.setattr(app_module, "_ruimte_inventory_query", lambda *args: FakeQuery())
+
+    response = _csrf_client(app_module).get("/assistent/kamer/9/print/kanban")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'id="toggleAllButton"' in html
+    assert "Alles selecteren" in html
+
+
+def test_print_selectie_keeps_submitted_selection_instead_of_wiping_it(
+    app_module, monkeypatch,
+):
+    """Ticket #24 AC: 'Als het versturen van een lege selectie wordt
+    geprobeerd, blijft een eerder gemaakte selectie staan in plaats van
+    gewist te worden.' A stale/invalid submitted id (e.g. an excluded item,
+    which a real browser can't check since it's disabled — but a retried or
+    crafted request could still send it) must still come back reflected in
+    the re-rendered selection, not silently reset to nothing.
+    """
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Kast A")
+    company = SimpleNamespace(bedrijf_id=1, logo_url=None)  # geen logo -> ongeldig
+    branch = SimpleNamespace(naam="Vestiging")
+    room = SimpleNamespace(naam="Behandelkamer", nummer=None)
+    room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        locatie_foto_url=None,
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        eigen_naam="Verband",
+        foto_url="article.png",
+        verpakkingseenheid_tekst="doos",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    rows = [(position, article, None, kast, room, room_type, company, branch)]
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kast/4/print/kanban",
+        data={"_csrf_token": "test-csrf", "position_ids": ["12"]},
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200  # re-rendered, geen redirect
+    assert "Selecteer minimaal één geldig Artikel om te printen." in html
+    assert "1 geselecteerd" in html
+    assert re.search(r'value="12"\s+checked', html)
 
 
 def test_room_print_selection_processes_only_selected_valid_items(
@@ -884,43 +1053,6 @@ def test_room_location_print_selection_processes_selected_standard_and_kanban(
     ]
     assert len(sent) == 1
     assert sent[0][1]
-
-
-def test_empty_room_print_selection_has_no_side_effect(
-    app_module,
-    monkeypatch,
-):
-    room = SimpleNamespace(ruimte_id=9, naam="Lege kamer", nummer=None)
-    commits = []
-
-    class FakeQuery:
-        def all(self):
-            return []
-
-    class FakeSession:
-        def commit(self):
-            commits.append(True)
-
-        def rollback(self):
-            return None
-
-    monkeypatch.setattr(app_module, "check_db", lambda: True)
-    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: room)
-    monkeypatch.setattr(app_module, "_ruimte_inventory_query", lambda *args: FakeQuery())
-    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
-
-    response = _csrf_client(app_module).post(
-        "/assistent/kamer/9/print/kanban",
-        data={"_csrf_token": "test-csrf"},
-    )
-
-    assert response.status_code == 200
-    html = response.get_data(as_text=True)
-    assert "Selecteer minimaal één geldig Artikel" in html
-    assert 'id="printSelectionButton" disabled' in html
-    assert "assistent_kamer_view" in html or "/assistent/kamer/9" in html
-    assert commits == []
 
 
 def test_room_page_exposes_independent_print_actions_with_counts(
