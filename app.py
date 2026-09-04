@@ -1634,8 +1634,12 @@ def dashboard():
     if huidig_id:
         try:
             print_queue_count = db.session.query(Print_Queue).filter_by(
-                bedrijf_id=huidig_id, 
+                bedrijf_id=huidig_id,
                 status='PENDING'
+            ).count()
+            print_queue_count += db.session.query(LocatiekaartVersie).filter_by(
+                bedrijf_id=huidig_id,
+                status=LocatiekaartStatus.PENDING_PRINT.value
             ).count()
             open_scan_count = db.session.query(KanbanScanlijstItem).filter(
                 KanbanScanlijstItem.bedrijf_id == huidig_id,
@@ -2309,6 +2313,8 @@ def assistent_print_queue():
         for item in queue_items
     ]
 
+    locatiekaart_versions = _get_pending_locatiekaart_versions(bedrijf_id)
+
     try:
         _, stale_layout, layout_warning = get_preview_layout()
         if stale_layout:
@@ -2322,6 +2328,7 @@ def assistent_print_queue():
         'assistent_print_queue.html',
         queue_items=queue_items,
         queue_rows=queue_rows,
+        locatiekaart_versions=locatiekaart_versions,
         print_service_url=PRINT_SERVICE_URL,
         preview_layout_warning=preview_layout_warning,
         preview_layout_error=preview_layout_error
@@ -2627,25 +2634,15 @@ def verstuur_print_opdracht(print_id):
         flash(error_msg, "danger")
     return redirect(url_for('assistent_print_queue'))
 
-@app.route('/assistent/print-queue/verstuur-alles', methods=['POST'])
-def verstuur_alle_print_opdrachten():
-    if not check_db():
-        return redirect(url_for('dashboard'))
-    bedrijf_id = get_huidig_bedrijf_id()
-
-    items = db.session.query(Print_Queue).filter(
-        Print_Queue.bedrijf_id == bedrijf_id,
-        Print_Queue.status == 'PENDING'
-    ).order_by(Print_Queue.aangemaakt_op.asc()).all()
-
-    if not items:
-        flash("Geen openstaande printopdrachten.", "info")
-        return redirect(url_for('assistent_print_queue'))
-
+def _send_queue_items_and_flash(items):
+    """Shared tail for verstuur_alle_print_opdrachten and
+    verstuur_selectie_print_opdrachten (ticket #26): test connectivity, send
+    each item, mark/delete on success, then flash the aggregate outcome.
+    """
     ok, detail = test_print_service_connectivity()
     if not ok:
         flash(detail, 'danger')
-        return redirect(url_for('assistent_print_queue'))
+        return
 
     queue_sources = _queue_item_sources(items)
     success_count = 0
@@ -2670,6 +2667,24 @@ def verstuur_alle_print_opdrachten():
     if fail_count:
         extra = " | ".join(fail_messages)
         flash(f"{fail_count} opdracht(en) mislukt. {extra}", "danger")
+
+
+@app.route('/assistent/print-queue/verstuur-alles', methods=['POST'])
+def verstuur_alle_print_opdrachten():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+
+    items = db.session.query(Print_Queue).filter(
+        Print_Queue.bedrijf_id == bedrijf_id,
+        Print_Queue.status == 'PENDING'
+    ).order_by(Print_Queue.aangemaakt_op.asc()).all()
+
+    if not items:
+        flash("Geen openstaande printopdrachten.", "info")
+        return redirect(url_for('assistent_print_queue'))
+
+    _send_queue_items_and_flash(items)
     return redirect(url_for('assistent_print_queue'))
 
 @app.route('/assistent/print-queue/annuleren/<int:print_id>', methods=['POST'])
@@ -2686,6 +2701,158 @@ def annuleren_print_opdracht(print_id):
         db.session.delete(item)
         db.session.commit()
         flash("Aanvraag geannuleerd.", "info")
+    else:
+        # Ticket #26 AC: annuleren toont altijd een melding, ook als het
+        # item al verwerkt of verdwenen is — nooit een stille no-op.
+        flash("Aanvraag niet gevonden of al verwerkt.", "warning")
+    return redirect(url_for('assistent_print_queue'))
+
+
+@app.route('/assistent/print-queue/verstuur-selectie', methods=['POST'])
+def verstuur_selectie_print_opdrachten():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+
+    print_ids = {
+        int(value)
+        for value in request.form.getlist('print_ids')
+        if value.isdigit()
+    }
+    if not print_ids:
+        flash("Selecteer minimaal één Kanban-kaartje om te versturen.", "warning")
+        return redirect(url_for('assistent_print_queue'))
+
+    items = db.session.query(Print_Queue).filter(
+        Print_Queue.bedrijf_id == bedrijf_id,
+        Print_Queue.status == 'PENDING',
+        Print_Queue.print_id.in_(print_ids),
+    ).order_by(Print_Queue.aangemaakt_op.asc()).all()
+
+    if not items:
+        flash("Geselecteerde opdracht(en) niet gevonden of al verwerkt.", "warning")
+        return redirect(url_for('assistent_print_queue'))
+
+    _send_queue_items_and_flash(items)
+    return redirect(url_for('assistent_print_queue'))
+
+
+def _get_pending_locatiekaart_versions(bedrijf_id, newest_first=True):
+    query = db.session.query(LocatiekaartVersie).filter(
+        LocatiekaartVersie.bedrijf_id == bedrijf_id,
+        LocatiekaartVersie.status == LocatiekaartStatus.PENDING_PRINT.value,
+    )
+    order_column = LocatiekaartVersie.created_at
+    order_column = order_column.desc() if newest_first else order_column.asc()
+    return query.order_by(order_column).all()
+
+
+def _send_locatiekaart_versions_and_flash(versions):
+    """Shared tail for the three locatiekaart-verstuur routes (ticket #26):
+    send via _send_locatiekaart_batch, then report the outcome in plain
+    language — no batch-ID or job-ID in the message the assistente sees.
+
+    Runs the same connectivity pre-flight as the Kanban-side send routes
+    (BESLIST-3: keep the flow as identical as possible) instead of
+    discovering an unreachable printservice only after fetching/encoding
+    every card's images.
+    """
+    ok, detail = test_print_service_connectivity()
+    if not ok:
+        flash(detail, 'danger')
+        return
+
+    sent, error, metadata, skipped = _send_locatiekaart_batch(
+        versions, str(uuid.uuid4()),
+    )
+    if not sent:
+        flash(f'A4-printaanvraag mislukt: {error}', 'danger')
+        return
+    if skipped:
+        flash(
+            f'{len(skipped)} kaartje(s) overgeslagen: '
+            + '; '.join(f'{name} ({reason})' for name, reason in skipped),
+            'warning',
+        )
+    flash(
+        f'{metadata["cardCount"]} Locatiekaartje(s) verstuurd naar de '
+        f'A4-kleurenprinter ({metadata["sheetCount"]} vel(len)).',
+        'success',
+    )
+
+
+@app.route('/assistent/print-queue/locatiekaart/verstuur/<int:locatiekaart_versie_id>', methods=['POST'])
+def locatiekaart_verstuur_enkel(locatiekaart_versie_id):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    version = db.session.query(LocatiekaartVersie).filter(
+        LocatiekaartVersie.locatiekaart_versie_id == locatiekaart_versie_id,
+        LocatiekaartVersie.bedrijf_id == bedrijf_id,
+        LocatiekaartVersie.status == LocatiekaartStatus.PENDING_PRINT.value,
+    ).first()
+    if not version:
+        flash("Locatiekaartje niet gevonden of al verwerkt.", "warning")
+        return redirect(url_for('assistent_print_queue'))
+    _send_locatiekaart_versions_and_flash([version])
+    return redirect(url_for('assistent_print_queue'))
+
+
+@app.route('/assistent/print-queue/locatiekaart/verstuur-selectie', methods=['POST'])
+def locatiekaart_verstuur_selectie():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+
+    versie_ids = {
+        int(value)
+        for value in request.form.getlist('locatiekaart_ids')
+        if value.isdigit()
+    }
+    if not versie_ids:
+        flash("Selecteer minimaal één Locatiekaartje om te versturen.", "warning")
+        return redirect(url_for('assistent_print_queue'))
+
+    versions = db.session.query(LocatiekaartVersie).filter(
+        LocatiekaartVersie.bedrijf_id == bedrijf_id,
+        LocatiekaartVersie.status == LocatiekaartStatus.PENDING_PRINT.value,
+        LocatiekaartVersie.locatiekaart_versie_id.in_(versie_ids),
+    ).order_by(LocatiekaartVersie.created_at.asc()).all()
+    if not versions:
+        flash("Geselecteerde kaartje(s) niet gevonden of al verwerkt.", "warning")
+        return redirect(url_for('assistent_print_queue'))
+
+    _send_locatiekaart_versions_and_flash(versions)
+    return redirect(url_for('assistent_print_queue'))
+
+
+@app.route('/assistent/print-queue/locatiekaart/verstuur-alles', methods=['POST'])
+def locatiekaart_verstuur_alles():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    versions = _get_pending_locatiekaart_versions(bedrijf_id, newest_first=False)
+    if not versions:
+        flash("Geen openstaande Locatiekaartjes.", "info")
+        return redirect(url_for('assistent_print_queue'))
+    _send_locatiekaart_versions_and_flash(versions)
+    return redirect(url_for('assistent_print_queue'))
+
+
+@app.route('/assistent/print-queue/locatiekaart/annuleren/<int:locatiekaart_versie_id>', methods=['POST'])
+def locatiekaart_annuleren(locatiekaart_versie_id):
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    version = db.session.query(LocatiekaartVersie).filter(
+        LocatiekaartVersie.locatiekaart_versie_id == locatiekaart_versie_id,
+        LocatiekaartVersie.bedrijf_id == bedrijf_id,
+    ).first()
+    if version and mark_locatiekaart_version_cancelled(version):
+        db.session.commit()
+        flash("Aanvraag geannuleerd.", "info")
+    else:
+        flash("Aanvraag niet gevonden of al verwerkt.", "warning")
     return redirect(url_for('assistent_print_queue'))
 
 @app.route('/artikelen-beheer', methods=['GET', 'POST'])

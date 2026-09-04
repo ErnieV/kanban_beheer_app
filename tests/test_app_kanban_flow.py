@@ -2103,6 +2103,349 @@ def test_user_facing_print_route_sends_to_fake_print_service(
     }
 
 
+def test_verstuur_selectie_sends_only_the_posted_ids_and_flashes_success(
+    app_module, monkeypatch
+):
+    """Ticket #26: the Printopdrachten-wachtrij gets a 'verstuur geselecteerde'
+    action for Kanban-kaartjes, mirroring verstuur_alle_print_opdrachten but
+    scoped to the checked rows.
+    """
+    queue_item = SimpleNamespace(
+        print_id=7,
+        bedrijf_id=1,
+        status="PENDING",
+        kaart_id="kaart-7",
+        printer_id="reception-badgy-01",
+        card_type="KANBAN_TWO_BIN",
+        header_text="KAMER",
+        header_color="#123456",
+        product_name="Verband",
+        product_packaging="doos",
+        product_sku="7",
+        product_image_url="data:image/png;base64,AA==",
+        company_logo_url="data:image/png;base64,AA==",
+        location_text="Kast A",
+        min_level=99,
+        refill_quantity=99,
+        qr_code_value="https://example.test/scan/token",
+        qr_human_readable="KB-1234",
+    )
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+        def in_(self, values):
+            return True
+
+        def asc(self):
+            return self
+
+    class QueueQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [queue_item]
+
+    card = SimpleNamespace(kaart_id="kaart-7", voorraad_positie_id=12, status="PENDING_PRINT")
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        lokaal_artikel_id=7,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+    )
+    article = SimpleNamespace(lokaal_artikel_id=7, kanban_min=3, kanban_refill_quantity=4)
+
+    class SourceQuery:
+        def outerjoin(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [(card, position, article)]
+
+    captured = {}
+
+    class FakeSession:
+        def query(self, *models):
+            if models and models[0] is app_module.Print_Queue:
+                return QueueQuery()
+            return SourceQuery()
+
+        def delete(self, item):
+            captured.setdefault("deleted", []).append(item)
+
+        def commit(self):
+            captured["committed"] = True
+
+    class FakeResponse:
+        status_code = 202
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "ACCEPTED", "jobId": "job-7"}
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module, "test_print_service_connectivity", lambda: (True, "ok")
+    )
+    monkeypatch.setattr(app_module, "PRINT_SERVICE_URL", "http://print.test")
+    monkeypatch.setattr(app_module, "PRINT_SERVICE_REQUIRE_API_KEY", False)
+    monkeypatch.setattr(app_module.requests, "post", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(
+        app_module,
+        "Print_Queue",
+        SimpleNamespace(
+            print_id=FakeField(),
+            bedrijf_id=FakeField(),
+            status=FakeField(),
+            aangemaakt_op=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "KanbanKaart",
+        SimpleNamespace(kaart_id=FakeField(), voorraad_positie_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Voorraad_Positie",
+        SimpleNamespace(voorraad_positie_id=FakeField(), lokaal_artikel_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module, "Lokaal_Artikel", SimpleNamespace(lokaal_artikel_id=FakeField())
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/verstuur-selectie",
+        data={"_csrf_token": "test-csrf", "print_ids": ["7"]},
+    )
+
+    assert response.status_code == 302
+    assert captured["deleted"] == [queue_item]
+    assert captured["committed"] is True
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "1 kaartje(s) verstuurd naar lokale printer." in flash_messages
+
+
+def test_verstuur_selectie_without_any_checked_row_sends_nothing(
+    app_module, monkeypatch
+):
+    send_calls = []
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module.requests, "post", lambda *a, **k: send_calls.append(True)
+    )
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/verstuur-selectie",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert send_calls == []
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "Selecteer minimaal één Kanban-kaartje" in flash_messages
+
+
+def test_annuleren_print_opdracht_always_flashes_never_a_silent_no_op(
+    app_module, monkeypatch
+):
+    """Ticket #26 AC: annuleren must never be a silent no-op, even when the
+    item is already gone or processed by someone else.
+    """
+    queue_item = SimpleNamespace(print_id=7, bedrijf_id=1, status="PENDING", kaart_id=None)
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+    class QueueQuery:
+        def __init__(self, result):
+            self._result = result
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return self._result
+
+    class FakeSession:
+        def __init__(self, result):
+            self._result = result
+            self.deleted = []
+            self.committed = False
+
+        def query(self, *models):
+            return QueueQuery(self._result)
+
+        def delete(self, item):
+            self.deleted.append(item)
+
+        def commit(self):
+            self.committed = True
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "Print_Queue",
+        SimpleNamespace(print_id=FakeField(), bedrijf_id=FakeField()),
+    )
+
+    found_session = FakeSession(queue_item)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=found_session))
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/annuleren/7",
+        data={"_csrf_token": "test-csrf"},
+    )
+    assert response.status_code == 302
+    assert found_session.deleted == [queue_item]
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "Aanvraag geannuleerd." in flash_messages
+
+    missing_session = FakeSession(None)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=missing_session))
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/annuleren/999",
+        data={"_csrf_token": "test-csrf"},
+    )
+    assert response.status_code == 302
+    assert missing_session.deleted == []
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "Aanvraag niet gevonden of al verwerkt." in flash_messages
+
+
+def test_print_queue_view_renders_both_kanban_and_locatiekaart_sections(
+    app_module, monkeypatch
+):
+    """Ticket #26: één Printwachtrij-pagina met twee secties — Kanban-kaartjes
+    (Print_Queue) en Locatiekaartjes (LocatiekaartVersie) — elk met een eigen
+    selectie-checkbox-kolom en verstuur-acties.
+    """
+    queue_item = SimpleNamespace(
+        print_id=7,
+        bedrijf_id=1,
+        status="PENDING",
+        printer_id="reception-badgy-01",
+        card_type="KANBAN_TWO_BIN",
+        header_text="KAMER",
+        header_color="#123456",
+        product_name="Verband",
+        product_packaging="doos",
+        product_sku="7",
+        product_image_url=None,
+        company_logo_url=None,
+        location_text="Kast A",
+        min_level=3,
+        refill_quantity=4,
+        max_level=None,
+        qr_code_value="https://example.test/scan/token",
+        qr_human_readable="KB-1234",
+        aangemaakt_op=datetime.datetime(2026, 8, 28, 12, 0),
+    )
+    locatiekaart_version = SimpleNamespace(
+        locatiekaart_versie_id=1,
+        ruimte_naam="1 Behandelkamer",
+        opslaglocatie_naam="Kast A",
+        kamertype_naam="Behandeling",
+        kamertype_kleur="#123456",
+        artikelnaam="Pleisters",
+        artikel_foto_url=None,
+        materiaaltype="KANBAN",
+        min_level=5,
+        created_at=datetime.datetime(2026, 8, 28, 12, 0),
+    )
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+        def desc(self):
+            return self
+
+    class FakeQueue:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [queue_item]
+
+    class FakeLocatiekaartQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [locatiekaart_version]
+
+    class FakeSession:
+        def query(self, *models):
+            if models and models[0] is app_module.LocatiekaartVersie:
+                return FakeLocatiekaartQuery()
+            return FakeQueue()
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_preview_layout", lambda: ({}, False, None))
+    monkeypatch.setattr(
+        app_module,
+        "Print_Queue",
+        SimpleNamespace(
+            bedrijf_id=FakeField(), status=FakeField(), aangemaakt_op=FakeField()
+        ),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = app_module.app.test_client().get("/assistent/print-queue")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Printopdrachten" in html
+    assert "Kanban-kaartjes" in html
+    assert "Locatiekaartjes" in html
+    assert "Verband" in html  # Kanban-rij
+    assert "Pleisters" in html  # Locatiekaart-rij
+    assert 'name="print_ids"' in html
+    assert 'name="locatiekaart_ids"' in html
+    # A4-vel-verspilling waarschuwing bij per-regel versturen (BESLIST-12).
+    assert "heel A4-vel" in html
+    # Elke sectie draagt zijn eigen doelprinter-label, zodat zowel de
+    # 'verstuur geselecteerde' als de 'alles versturen'-bevestiging het
+    # AC-vereiste 'doelprinter' kunnen tonen (spec-review fix, ticket #26).
+    assert 'data-printer-label="Badgy 200-printer"' in html
+    assert 'data-printer-label="A4-kleurenprinter"' in html
+
+
 def test_superseded_queue_item_is_not_sent_to_print_service(
     app_module, monkeypatch
 ):
@@ -2193,8 +2536,20 @@ def test_print_queue_view_uses_effective_min_and_refill_without_max(
         def all(self):
             return [queue_item]
 
+    class EmptyQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return []
+
     class FakeSession:
         def query(self, *models):
+            if models and models[0] is app_module.LocatiekaartVersie:
+                return EmptyQuery()
             return FakeQueue()
 
     monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
@@ -2268,8 +2623,20 @@ def test_print_queue_view_precomputes_linked_card_settings(
         def all(self):
             return [(card, position, article)]
 
+    class EmptyQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return []
+
     class FakeSession:
         def query(self, *models):
+            if models and models[0] is app_module.LocatiekaartVersie:
+                return EmptyQuery()
             return QueueQuery() if len(models) == 1 else SourceQuery()
 
     monkeypatch.setattr(app_module, "check_db", lambda: True)

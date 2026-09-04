@@ -8,22 +8,13 @@
 </div>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2><i class="bi bi-printer"></i> Print Wachtrij</h2>
-    <div class="d-flex align-items-center gap-2">
-        <span class="badge bg-primary">{{ queue_items|length }} aanvragen</span>
-        <form action="{{ url_for('test_print_verbinding') }}" method="POST" class="d-inline">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-sm btn-outline-secondary" title="Check poort en service endpoint">
-                <i class="bi bi-wifi"></i> Test verbinding
-            </button>
-        </form>
-        <form action="{{ url_for('verstuur_alle_print_opdrachten') }}" method="POST" class="d-inline" onsubmit="return confirm('Alle openstaande opdrachten naar de lokale printer sturen?');">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-sm btn-success">
-                <i class="bi bi-send-check"></i> Verstuur Alles
-            </button>
-        </form>
-    </div>
+    <h2><i class="bi bi-printer"></i> Printopdrachten</h2>
+    <form action="{{ url_for('test_print_verbinding') }}" method="POST" class="d-inline">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-outline-secondary" title="Check poort en service endpoint">
+            <i class="bi bi-wifi"></i> Test verbinding
+        </button>
+    </form>
 </div>
 
 <div class="alert alert-light border small">
@@ -45,154 +36,309 @@
 </div>
 {% endif %}
 
-<div class="card shadow-sm">
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-bordered table-striped table-hover align-middle mb-0" style="font-size: 0.9rem;">
-                <thead class="table-light">
-                    <tr>
-                        <th style="width: 20%;">Locatie & Header</th>
-                        <th style="width: 25%;">Artikel</th>
-                        <th style="width: 10%;">Logistiek</th>
-                        <th style="width: 15%;" class="text-center">QR Code</th>
-                        <th style="width: 10%;">Status</th>
-                        <th style="width: 100px;" class="text-end">Acties</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for queue_row in queue_rows %}
-                    {% set item = queue_row.item %}
-                    {% set effectieve_kanban = queue_row.display_values %}
-                    {% set kaart_verouderd = queue_row.is_superseded %}
-                    <tr>
-                        <!-- HEADER INFO & LOGO -->
-                        <td>
-                            <!-- Header Preview -->
-                            <div class="p-2 mb-2 text-center text-white fw-bold text-uppercase rounded shadow-sm" 
-                                 style="background-color: {{ item.header_color|default('#333') }}; font-size: 0.85rem;">
-                                {{ item.header_text }}
-                            </div>
-                            
-                            <!-- Bedrijfslogo -->
-                            {% if item.company_logo_url %}
-                                <div class="text-center">
-                                    <img src="{{ item.company_logo_url }}" alt="Logo" style="max-height: 25px; opacity: 0.8;">
-                                </div>
-                            {% endif %}
-                            <div class="text-muted small text-center mt-1">{{ item.location_text }}</div>
-                        </td>
-
-                        <!-- ARTIKEL -->
-                        <td>
-                            <div class="d-flex">
-                                <!-- Product Foto -->
-                                <div class="me-3 flex-shrink-0">
-                                    {% if item.product_image_url %}
-                                        <img src="{{ item.product_image_url }}" class="rounded border bg-white" style="width: 50px; height: 50px; object-fit: contain;">
-                                    {% else %}
-                                        <div class="rounded border bg-light d-flex align-items-center justify-content-center text-muted" style="width: 50px; height: 50px;">
-                                            <i class="bi bi-box-seam"></i>
-                                        </div>
-                                    {% endif %}
-                                </div>
-                                <div>
-                                    <strong>{{ item.product_name }}</strong><br>
-                                    <span class="text-muted">{{ item.product_packaging }}</span><br>
-                                    <small class="text-dark font-monospace">{{ item.product_sku }}</small>
-                                </div>
-                            </div>
-                        </td>
-
-                        <!-- LOGISTIEK -->
-                        <td>
-                            <div class="d-flex flex-column gap-1">
-                                {% if kaart_verouderd %}
-                                    <span class="text-danger">Kaart verouderd</span>
-                                    <span class="small text-muted">Vraag een nieuwe kaart aan.</span>
-                                {% elif effectieve_kanban.min_level is not none %}
-                                    {{ render_kanban_values(effectieve_kanban, compact=true) }}
-                                {% else %}
-                                    <span class="text-muted">Geen Kanban-instelling</span>
-                                {% endif %}
-                            </div>
-                        </td>
-
-                        <!-- QR CODE PREVIEW -->
-                        <td class="text-center bg-white">
-                            {% if item.qr_code_value and 'http' in item.qr_code_value %}
-                                <img src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&data={{ item.qr_code_value }}" 
-                                     alt="QR" class="img-fluid" style="width: 60px; height: 60px;">
-                            {% else %}
-                                <i class="bi bi-qr-code text-muted" style="font-size: 2rem;"></i>
-                            {% endif %}
-                            <div class="font-monospace fw-bold small mt-1" style="font-size: 0.7rem;">{{ item.qr_human_readable }}</div>
-                        </td>
-
-                        <!-- STATUS -->
-                        <td>
-                            <div class="small text-muted mb-1">{{ item.aangemaakt_op.strftime('%d-%m %H:%M') }}</div>
-                            {% if item.status == 'PENDING' %}
-                                <span class="badge bg-warning text-dark w-100"><i class="bi bi-hourglass-split"></i> Wacht</span>
-                            {% else %}
-                                <span class="badge bg-secondary w-100">{{ item.status }}</span>
-                            {% endif %}
-                        </td>
-
-                        <!-- ACTIES -->
-                        <td class="text-end">
-                            <div class="btn-group-vertical btn-group-sm w-100">
-                                <form action="{{ url_for('verstuur_print_opdracht', print_id=item.print_id) }}" method="POST" class="mb-1">
+<!-- ============================= KANBAN-KAARTJES ============================= -->
+<form id="kanbanSelectieForm" action="{{ url_for('verstuur_selectie_print_opdrachten') }}" method="POST">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="btn btn-success w-100" title="Stuur direct naar lokale printer" {% if kaart_verouderd %}disabled{% endif %}>
-                                        <i class="bi bi-send"></i> Print
-                                    </button>
-                                </form>
+</form>
 
-                                <!-- DETAILS KNOP (Voorbeeld) -->
-                                <button type="button" class="btn btn-outline-info mb-1" 
-                                        title="Bekijk voorbeeld"
-                                        onclick="showDetails(this)"
-                                        data-id="{{ item.print_id }}"
-                                        data-header="{{ item.header_text }}"
-                                        data-color="{{ item.header_color }}"
-                                        data-product="{{ item.product_name }}"
-                                        data-packaging="{{ item.product_packaging }}"
-                                        data-sku="{{ item.product_sku }}"
-                                        data-img="{{ item.product_image_url }}"
-                                        data-logo="{{ item.company_logo_url }}"
-                                        data-location="{{ item.location_text }}"
-                                        data-min="{{ effectieve_kanban.min_level if effectieve_kanban.min_level is not none else '' }}"
-                                        data-refill="{{ effectieve_kanban.refill_quantity if effectieve_kanban.refill_quantity is not none else '' }}"
-                                        data-qr="{{ item.qr_code_value }}"
-                                        data-human="{{ item.qr_human_readable }}">
-                                    <i class="bi bi-eye"></i> Voorbeeld
-                                </button>
-
-                                <!-- DIRECT VERWIJDEREN KNOP -->
-                                <form action="{{ url_for('annuleren_print_opdracht', print_id=item.print_id) }}" method="POST" onsubmit="return confirm('Aanvraag direct verwijderen uit wachtrij?');">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="btn btn-outline-danger w-100" title="Verwijder uit wachtrij">
-                                        <i class="bi bi-trash"></i> Verwijder
-                                    </button>
-                                </form>
-                            </div>
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="6" class="text-center py-5 text-muted">
-                            <i class="bi bi-inbox fs-1 d-block mb-2"></i>
-                            De printwachtrij is leeg.
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+<section class="mb-5" id="kanbanSection" data-section data-printer-label="Badgy 200-printer">
+    <div class="d-flex justify-content-between align-items-start mb-2 flex-wrap gap-2">
+        <div>
+            <h4 class="mb-0"><i class="bi bi-printer-fill me-1"></i> Kanban-kaartjes</h4>
+            <p class="text-muted small mb-0">Doelprinter: Badgy 200-printer</p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-primary">{{ queue_rows|length }} openstaand</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-toggle-all
+                    {% if not queue_rows %}disabled{% endif %}>
+                Alles selecteren
+            </button>
+            <button type="submit" form="kanbanSelectieForm" class="btn btn-sm btn-outline-success"
+                    data-verstuur-selectie disabled>
+                Verstuur geselecteerde
+            </button>
+            <form action="{{ url_for('verstuur_alle_print_opdrachten') }}" method="POST" class="d-inline"
+                  data-verstuur-alles-form>
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-success" {% if not queue_rows %}disabled{% endif %}>
+                    <i class="bi bi-send-check"></i> Alles versturen
+                </button>
+            </form>
         </div>
     </div>
-</div>
 
-<!-- DETAILS MODAL (PREVIEW) -->
+    <div class="card shadow-sm">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-bordered table-striped table-hover align-middle mb-0" style="font-size: 0.9rem;">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 3%;"></th>
+                            <th style="width: 18%;">Locatie & Header</th>
+                            <th style="width: 23%;">Artikel</th>
+                            <th style="width: 10%;">Logistiek</th>
+                            <th style="width: 14%;" class="text-center">QR Code</th>
+                            <th style="width: 10%;">Status</th>
+                            <th style="width: 100px;" class="text-end">Acties</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for queue_row in queue_rows %}
+                        {% set item = queue_row.item %}
+                        {% set effectieve_kanban = queue_row.display_values %}
+                        {% set kaart_verouderd = queue_row.is_superseded %}
+                        <tr>
+                            <td class="text-center">
+                                <input type="checkbox" class="form-check-input select-row" name="print_ids"
+                                       value="{{ item.print_id }}" form="kanbanSelectieForm"
+                                       data-ruimte="{{ item.header_text }}" data-opslaglocatie="{{ item.location_text }}"
+                                       {% if kaart_verouderd %}disabled{% endif %}
+                                       aria-label="Selecteer dit Kanban-kaartje">
+                            </td>
+                            <!-- HEADER INFO & LOGO -->
+                            <td>
+                                <div class="p-2 mb-2 text-center text-white fw-bold text-uppercase rounded shadow-sm"
+                                     style="background-color: {{ item.header_color|default('#333') }}; font-size: 0.85rem;">
+                                    {{ item.header_text }}
+                                </div>
+                                {% if item.company_logo_url %}
+                                    <div class="text-center">
+                                        <img src="{{ item.company_logo_url }}" alt="Logo" style="max-height: 25px; opacity: 0.8;">
+                                    </div>
+                                {% endif %}
+                                <div class="text-muted small text-center mt-1">{{ item.location_text }}</div>
+                            </td>
+
+                            <!-- ARTIKEL -->
+                            <td>
+                                <div class="d-flex">
+                                    <div class="me-3 flex-shrink-0">
+                                        {% if item.product_image_url %}
+                                            <img src="{{ item.product_image_url }}" class="rounded border bg-white" style="width: 50px; height: 50px; object-fit: contain;">
+                                        {% else %}
+                                            <div class="rounded border bg-light d-flex align-items-center justify-content-center text-muted" style="width: 50px; height: 50px;">
+                                                <i class="bi bi-box-seam"></i>
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                    <div>
+                                        <strong>{{ item.product_name }}</strong><br>
+                                        <span class="text-muted">{{ item.product_packaging }}</span><br>
+                                        <small class="text-dark font-monospace">{{ item.product_sku }}</small>
+                                    </div>
+                                </div>
+                            </td>
+
+                            <!-- LOGISTIEK -->
+                            <td>
+                                <div class="d-flex flex-column gap-1">
+                                    {% if kaart_verouderd %}
+                                        <span class="text-danger">Kaart verouderd</span>
+                                        <span class="small text-muted">Vraag een nieuwe kaart aan.</span>
+                                    {% elif effectieve_kanban.min_level is not none %}
+                                        {{ render_kanban_values(effectieve_kanban, compact=true) }}
+                                    {% else %}
+                                        <span class="text-muted">Geen Kanban-instelling</span>
+                                    {% endif %}
+                                </div>
+                            </td>
+
+                            <!-- QR CODE PREVIEW -->
+                            <td class="text-center bg-white">
+                                {% if item.qr_code_value and 'http' in item.qr_code_value %}
+                                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&data={{ item.qr_code_value }}"
+                                         alt="QR" class="img-fluid" style="width: 60px; height: 60px;">
+                                {% else %}
+                                    <i class="bi bi-qr-code text-muted" style="font-size: 2rem;"></i>
+                                {% endif %}
+                                <div class="font-monospace fw-bold small mt-1" style="font-size: 0.7rem;">{{ item.qr_human_readable }}</div>
+                            </td>
+
+                            <!-- STATUS -->
+                            <td>
+                                <div class="small text-muted mb-1">{{ item.aangemaakt_op.strftime('%d-%m %H:%M') }}</div>
+                                {% if item.status == 'PENDING' %}
+                                    <span class="badge bg-warning text-dark w-100"><i class="bi bi-hourglass-split"></i> Wacht</span>
+                                {% else %}
+                                    <span class="badge bg-secondary w-100">{{ item.status }}</span>
+                                {% endif %}
+                            </td>
+
+                            <!-- ACTIES -->
+                            <td class="text-end">
+                                <div class="btn-group-vertical btn-group-sm w-100">
+                                    <form action="{{ url_for('verstuur_print_opdracht', print_id=item.print_id) }}" method="POST" class="mb-1">
+                                        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-success w-100" title="Stuur direct naar lokale printer" {% if kaart_verouderd %}disabled{% endif %}>
+                                            <i class="bi bi-send"></i> Print
+                                        </button>
+                                    </form>
+
+                                    <button type="button" class="btn btn-outline-info mb-1"
+                                            title="Bekijk voorbeeld"
+                                            onclick="showDetails(this)"
+                                            data-id="{{ item.print_id }}"
+                                            data-header="{{ item.header_text }}"
+                                            data-color="{{ item.header_color }}"
+                                            data-product="{{ item.product_name }}"
+                                            data-packaging="{{ item.product_packaging }}"
+                                            data-sku="{{ item.product_sku }}"
+                                            data-img="{{ item.product_image_url }}"
+                                            data-logo="{{ item.company_logo_url }}"
+                                            data-location="{{ item.location_text }}"
+                                            data-min="{{ effectieve_kanban.min_level if effectieve_kanban.min_level is not none else '' }}"
+                                            data-refill="{{ effectieve_kanban.refill_quantity if effectieve_kanban.refill_quantity is not none else '' }}"
+                                            data-qr="{{ item.qr_code_value }}"
+                                            data-human="{{ item.qr_human_readable }}">
+                                        <i class="bi bi-eye"></i> Voorbeeld
+                                    </button>
+
+                                    <form action="{{ url_for('annuleren_print_opdracht', print_id=item.print_id) }}" method="POST" onsubmit="return confirm('Aanvraag direct verwijderen uit wachtrij?');">
+                                        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-outline-danger w-100" title="Verwijder uit wachtrij">
+                                            <i class="bi bi-trash"></i> Verwijder
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="7" class="text-center py-5 text-muted">
+                                <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                                Geen openstaande Kanban-kaartjes.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================= LOCATIEKAARTJES ============================= -->
+<form id="locatiekaartSelectieForm" action="{{ url_for('locatiekaart_verstuur_selectie') }}" method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+</form>
+
+<section id="locatiekaartSection" data-section data-printer-label="A4-kleurenprinter">
+    <div class="d-flex justify-content-between align-items-start mb-2 flex-wrap gap-2">
+        <div>
+            <h4 class="mb-0"><i class="bi bi-geo-alt-fill me-1"></i> Locatiekaartjes</h4>
+            <p class="text-muted small mb-0">Doelprinter: A4-kleurenprinter (8 kaartjes per vel)</p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-primary">{{ locatiekaart_versions|length }} openstaand</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-toggle-all
+                    {% if not locatiekaart_versions %}disabled{% endif %}>
+                Alles selecteren
+            </button>
+            <button type="submit" form="locatiekaartSelectieForm" class="btn btn-sm btn-outline-success"
+                    data-verstuur-selectie disabled>
+                Verstuur geselecteerde
+            </button>
+            <form action="{{ url_for('locatiekaart_verstuur_alles') }}" method="POST" class="d-inline"
+                  data-verstuur-alles-form>
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-success" {% if not locatiekaart_versions %}disabled{% endif %}>
+                    <i class="bi bi-send-check"></i> Alles versturen
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-bordered table-striped table-hover align-middle mb-0" style="font-size: 0.9rem;">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 3%;"></th>
+                            <th style="width: 22%;">Ruimte & Opslaglocatie</th>
+                            <th style="width: 30%;">Artikel</th>
+                            <th style="width: 15%;">Status</th>
+                            <th style="width: 120px;" class="text-end">Acties</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for version in locatiekaart_versions %}
+                        <tr>
+                            <td class="text-center">
+                                <input type="checkbox" class="form-check-input select-row" name="locatiekaart_ids"
+                                       value="{{ version.locatiekaart_versie_id }}" form="locatiekaartSelectieForm"
+                                       data-ruimte="{{ version.ruimte_naam }}" data-opslaglocatie="{{ version.opslaglocatie_naam }}"
+                                       aria-label="Selecteer dit Locatiekaartje">
+                            </td>
+                            <td>
+                                {% if version.kamertype_naam %}
+                                <div class="p-2 mb-2 text-center text-white fw-bold text-uppercase rounded shadow-sm"
+                                     style="background-color: {{ version.kamertype_kleur|default('#333') }}; font-size: 0.85rem;">
+                                    {{ version.kamertype_naam }}
+                                </div>
+                                {% endif %}
+                                <div>{{ version.ruimte_naam }}</div>
+                                <div class="text-muted small">{{ version.opslaglocatie_naam }}</div>
+                            </td>
+                            <td>
+                                <div class="d-flex">
+                                    <div class="me-3 flex-shrink-0">
+                                        {% if version.artikel_foto_url %}
+                                            <img src="{{ version.artikel_foto_url }}" class="rounded border bg-white" style="width: 50px; height: 50px; object-fit: contain;">
+                                        {% else %}
+                                            <div class="rounded border bg-light d-flex align-items-center justify-content-center text-muted" style="width: 50px; height: 50px;">
+                                                <i class="bi bi-box-seam"></i>
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                    <div>
+                                        <strong>{{ version.artikelnaam }}</strong>
+                                        {% if version.materiaaltype == 'KANBAN' and version.min_level is not none %}
+                                            <br><span class="text-muted small">Min {{ version.min_level }}</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="small text-muted mb-1">{{ version.created_at.strftime('%d-%m %H:%M') }}</div>
+                                <span class="badge bg-warning text-dark w-100"><i class="bi bi-hourglass-split"></i> Wacht</span>
+                            </td>
+                            <td class="text-end">
+                                <div class="btn-group-vertical btn-group-sm w-100">
+                                    <form action="{{ url_for('locatiekaart_verstuur_enkel', locatiekaart_versie_id=version.locatiekaart_versie_id) }}"
+                                          method="POST" class="mb-1"
+                                          onsubmit="return confirm('Dit drukt een heel A4-vel met 8 vakjes, waarvan er hier maar 1 gebruikt wordt — de rest blijft leeg. Doorgaan?');">
+                                        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-success w-100" title="Stuur dit ene kaartje (kost een heel A4-vel)">
+                                            <i class="bi bi-send"></i> Print
+                                        </button>
+                                    </form>
+                                    <form action="{{ url_for('locatiekaart_annuleren', locatiekaart_versie_id=version.locatiekaart_versie_id) }}"
+                                          method="POST" onsubmit="return confirm('Aanvraag direct verwijderen uit wachtrij?');">
+                                        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-outline-danger w-100" title="Verwijder uit wachtrij">
+                                            <i class="bi bi-trash"></i> Verwijder
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center py-5 text-muted">
+                                <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                                Geen openstaande Locatiekaartjes.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- DETAILS MODAL (PREVIEW, alleen Kanban-kaartjes) -->
 <div class="modal fade" id="detailsModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
@@ -203,9 +349,10 @@
             <div class="modal-body bg-light">
                 <div id="previewStatus" class="alert alert-warning small d-none mb-3"></div>
                 <div id="previewError" class="alert alert-danger small d-none mb-3"></div>
-                <div id="previewDebug" class="alert alert-secondary small mb-3"></div>
-                <div class="d-flex justify-content-center">
-                    <div id="previewCanvas" class="shadow-sm bg-white position-relative border rounded" style="width: 250px; height: 390px; overflow: hidden;"></div>
+                <div class="d-flex justify-content-center overflow-auto" style="max-height: 60vh;">
+                    <div id="previewCanvasWrap" style="width: 250px; height: 390px;">
+                        <div id="previewCanvas" class="shadow-sm bg-white position-relative border rounded" style="transform-origin: top left;"></div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -216,6 +363,80 @@
 </div>
 
 <script>
+    // ============ Selectie: alles/niets, "Verstuur geselecteerde" state, bevestiging met inhoud ============
+    document.querySelectorAll('[data-section]').forEach((section) => {
+        const checkboxes = [...section.querySelectorAll('.select-row')];
+        const selectable = checkboxes.filter((cb) => !cb.disabled);
+        const toggleAllBtn = section.querySelector('[data-toggle-all]');
+        const verstuurSelectieBtn = section.querySelector('[data-verstuur-selectie]');
+        const printerLabel = section.dataset.printerLabel || 'de printer';
+
+        function updateState() {
+            const checked = selectable.filter((cb) => cb.checked);
+            if (verstuurSelectieBtn) {
+                verstuurSelectieBtn.disabled = checked.length === 0;
+            }
+            if (toggleAllBtn) {
+                const allChecked = selectable.length > 0 && checked.length === selectable.length;
+                toggleAllBtn.textContent = allChecked ? 'Niets selecteren' : 'Alles selecteren';
+            }
+        }
+
+        checkboxes.forEach((cb) => cb.addEventListener('change', updateState));
+
+        if (toggleAllBtn) {
+            toggleAllBtn.addEventListener('click', () => {
+                const checked = selectable.filter((cb) => cb.checked);
+                const allChecked = selectable.length > 0 && checked.length === selectable.length;
+                selectable.forEach((cb) => { cb.checked = !allChecked; });
+                updateState();
+            });
+        }
+
+        function locationSummary(rows) {
+            const locations = [...new Set(rows.map((cb) => {
+                const ruimte = cb.dataset.ruimte || '';
+                const opslaglocatie = cb.dataset.opslaglocatie || '';
+                return opslaglocatie ? `${ruimte} (${opslaglocatie})` : ruimte;
+            }))];
+            if (locations.length <= 3) return locations.join(', ');
+            return `${locations.slice(0, 3).join(', ')} en ${locations.length - 3} andere plek(ken)`;
+        }
+
+        const selectieForm = document.getElementById(verstuurSelectieBtn ? verstuurSelectieBtn.getAttribute('form') : null);
+        if (selectieForm) {
+            selectieForm.addEventListener('submit', (event) => {
+                const checked = selectable.filter((cb) => cb.checked);
+                if (checked.length === 0) {
+                    event.preventDefault();
+                    return;
+                }
+                const ok = window.confirm(
+                    `${checked.length} kaartje(s) versturen naar ${printerLabel}?\nLocaties: ${locationSummary(checked)}`
+                );
+                if (!ok) event.preventDefault();
+            });
+        }
+
+        const verstuurAllesForm = section.querySelector('[data-verstuur-alles-form]');
+        if (verstuurAllesForm) {
+            verstuurAllesForm.addEventListener('submit', (event) => {
+                if (selectable.length === 0) {
+                    event.preventDefault();
+                    return;
+                }
+                const ok = window.confirm(
+                    `Alle ${selectable.length} openstaande kaartje(s) versturen naar ${printerLabel}?\n`
+                    + `Locaties: ${locationSummary(selectable)}`
+                );
+                if (!ok) event.preventDefault();
+            });
+        }
+
+        updateState();
+    });
+
+    // ============ Kanban-kaartje voorbeeld (structured layout preview) ============
     const previewState = {
         layout: null,
         modal: null
@@ -309,17 +530,14 @@
 
     function setPreviewMessage(id, message) {
         const el = document.getElementById(id);
+        if (!el) return;
         if (!message) {
             el.textContent = '';
-            if (id !== 'previewDebug') {
-                el.classList.add('d-none');
-            }
+            el.classList.add('d-none');
             return;
         }
         el.textContent = message;
-        if (id !== 'previewDebug') {
-            el.classList.remove('d-none');
-        }
+        el.classList.remove('d-none');
     }
 
     function applyBoxStyle(node, element) {
@@ -564,10 +782,20 @@
             canvas.appendChild(human);
         }
 
-        return {
-            mode: 'structured',
-            renderableCount: 7
-        };
+        return { width, height };
+    }
+
+    // Schaalt het (op ware kaartgrootte gerenderde) canvas naar de
+    // beschikbare ruimte in de modal, zodat het nooit overloopt
+    // (ticket #26: "de voorbeeldafbeelding past binnen het venster").
+    function fitCanvasToWrap(canvas, naturalWidth, naturalHeight) {
+        const wrap = document.getElementById('previewCanvasWrap');
+        const maxWidth = wrap.parentElement.clientWidth || 250;
+        const maxHeight = Math.round(window.innerHeight * 0.5);
+        const scale = Math.min(1, maxWidth / naturalWidth, maxHeight / naturalHeight);
+        canvas.style.transform = `scale(${scale})`;
+        wrap.style.width = `${naturalWidth * scale}px`;
+        wrap.style.height = `${naturalHeight * scale}px`;
     }
 
     function renderPreview(layout, data) {
@@ -576,10 +804,15 @@
 
         canvas.innerHTML = '';
         canvas.style.borderRadius = '4px';
+        canvas.style.transform = 'none';
 
-        let renderMeta = null;
+        let naturalWidth = 250;
+        let naturalHeight = 390;
+
         if (config.canvas && (config.header || config.productText || config.productImage || config.bottomZone || config.qr || config.logo)) {
-            renderMeta = renderStructuredKanbanLayout(canvas, config, data);
+            const size = renderStructuredKanbanLayout(canvas, config, data);
+            naturalWidth = size.width;
+            naturalHeight = size.height;
         } else {
             const width = toNumber(firstDefined(config, ['card.width', 'canvas.width', 'page.width', 'width'], 250), 250);
             const height = toNumber(firstDefined(config, ['card.height', 'canvas.height', 'page.height', 'height'], 390), 390);
@@ -591,15 +824,12 @@
             canvas.style.height = `${height}px`;
             canvas.style.backgroundColor = backgroundColor;
             canvas.style.borderRadius = `${borderRadius}px`;
+            naturalWidth = width;
+            naturalHeight = height;
 
             elements
                 .sort((a, b) => toNumber(firstDefined(a, ['zIndex'], 0), 0) - toNumber(firstDefined(b, ['zIndex'], 0), 0))
                 .forEach((element) => renderElement(canvas, element, data));
-
-            renderMeta = {
-                mode: 'generic',
-                renderableCount: elements.length
-            };
 
             if (!elements.length) {
                 const fallback = document.createElement('div');
@@ -609,25 +839,13 @@
             }
         }
 
-        const debug = (layout && layout.debug) || {};
-        const debugLine = [
-            `version=${layout && layout.layoutVersion ? layout.layoutVersion : 'unknown'}`,
-            `template=${layout && layout.template ? layout.template : 'n/a'}`,
-            `endpoint=${layout && layout.endpoint ? layout.endpoint : 'n/a'}`,
-            `mode=${renderMeta ? renderMeta.mode : 'unknown'}`,
-            `renderable=${renderMeta ? renderMeta.renderableCount : 0}`,
-            `raw=${debug.rawElementCount ?? 0}`,
-            `configKeys=${Array.isArray(debug.configKeys) ? debug.configKeys.join(',') || '-' : '-'}`,
-            `bodyKeys=${Array.isArray(debug.bodyKeys) ? debug.bodyKeys.join(',') || '-' : '-'}`
-        ].join(' | ');
-        setPreviewMessage('previewDebug', debugLine);
+        fitCanvasToWrap(canvas, naturalWidth, naturalHeight);
     }
 
     async function showDetails(button) {
         const data = previewData(button.dataset);
         setPreviewMessage('previewStatus', '');
         setPreviewMessage('previewError', '');
-        setPreviewMessage('previewDebug', 'Layout debug wordt geladen...');
 
         try {
             const result = await loadPreviewLayout(true);
@@ -640,7 +858,6 @@
         } catch (error) {
             document.getElementById('previewCanvas').innerHTML = '';
             setPreviewMessage('previewError', `${error.message} Preview kan niet betrouwbaar worden getoond.`);
-            setPreviewMessage('previewDebug', 'Geen layout JSON bruikbaar ontvangen.');
         }
 
         if (!previewState.modal) {

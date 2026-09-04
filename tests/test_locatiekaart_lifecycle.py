@@ -15,6 +15,53 @@ def app_module(monkeypatch):
     return app
 
 
+def _csrf_client(app_module):
+    client = app_module.app.test_client()
+    with client.session_transaction() as session:
+        session["_csrf_token"] = "test-csrf"
+    return client
+
+
+def _create_pending_locatiekaart_version(app_module, **overrides):
+    values = dict(
+        bedrijf_id=1,
+        voorraad_positie_id=91,
+        lokaal_artikel_id=7,
+        inhoud_hash="hash-1",
+        artikelnaam="Verband",
+        artikel_foto_url="data:image/png;base64,QUJD",
+        bedrijfslogo_url="data:image/png;base64,REVG",
+        vestiging_naam="Vestiging",
+        ruimte_naam="1 Behandelkamer",
+        opslaglocatie_naam="Kast A",
+        kamertype_naam="Behandeling",
+        kamertype_kleur="#123456",
+        materiaaltype="KANBAN",
+        min_level=5,
+        status=app_module.LocatiekaartStatus.PENDING_PRINT.value,
+    )
+    values.update(overrides)
+    with app_module.app.app_context():
+        version = app_module.LocatiekaartVersie(**values)
+        app_module.db.session.add(version)
+        app_module.db.session.commit()
+        return version.locatiekaart_versie_id
+
+
+def _locatiekaart_status(app_module, version_id):
+    with app_module.app.app_context():
+        version = app_module.db.session.query(app_module.LocatiekaartVersie).filter_by(
+            locatiekaart_versie_id=version_id
+        ).first()
+        return version.status if version else None
+
+
+def _flash_messages(client):
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    return " ".join(message for _, message in flashes)
+
+
 def test_location_card_content_uses_article_photo_and_effective_min(app_module):
     position, article, global_item, storage_location, room, room_type, company, branch = (
         _source_objects()
@@ -229,6 +276,304 @@ def test_kast_and_ruimte_inventory_row_shape_satisfies_both_print_paths(app_modu
 
     assert created is True
     assert vestiging_naam == "Vestiging"
+
+
+def test_locatiekaart_verstuur_enkel_sends_and_flashes_plain_language(
+    app_module, monkeypatch
+):
+    """Ticket #26: the per-row 'versturen' action for a queued Locatiekaartje
+    actually calls the A4 print service (_send_locatiekaart_batch, unused
+    since #25) and reports the outcome in plain language — no job/batch ID.
+    """
+    sent_calls = []
+
+    def fake_send(versions, print_batch_id):
+        sent_calls.append([v.locatiekaart_versie_id for v in versions])
+        return True, None, {
+            "printBatchId": print_batch_id,
+            "jobId": "job-xyz",
+            "status": "ACCEPTED",
+            "cardCount": len(versions),
+            "sheetCount": 1,
+        }
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module, "test_print_service_connectivity", lambda: (True, "ok")
+    )
+    monkeypatch.setattr(app_module, "send_location_cards_to_print_service", fake_send)
+
+    version_id = _create_pending_locatiekaart_version(app_module)
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        f"/assistent/print-queue/locatiekaart/verstuur/{version_id}",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert sent_calls == [[version_id]]
+    flash_messages = _flash_messages(client)
+    assert (
+        "1 Locatiekaartje(s) verstuurd naar de A4-kleurenprinter (1 vel(len))."
+        in flash_messages
+    )
+    assert "job-xyz" not in flash_messages
+    assert _locatiekaart_status(app_module, version_id) == (
+        app_module.LocatiekaartStatus.PRINTED.value
+    )
+
+
+def test_locatiekaart_verstuur_enkel_blocked_by_failed_connectivity_check(
+    app_module, monkeypatch
+):
+    """Symmetry fix from the ticket #26 spec review: the Locatiekaart-side
+    send routes must run the same connectivity pre-flight the Kanban-side
+    routes already ran, instead of discovering an unreachable printservice
+    only after fetching/encoding every card's images.
+    """
+    send_calls = []
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "test_print_service_connectivity",
+        lambda: (False, "PRINT_SERVICE_URL ontbreekt."),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda *a, **k: send_calls.append(True),
+    )
+
+    version_id = _create_pending_locatiekaart_version(app_module)
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        f"/assistent/print-queue/locatiekaart/verstuur/{version_id}",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert send_calls == []
+    assert "PRINT_SERVICE_URL ontbreekt." in _flash_messages(client)
+    assert _locatiekaart_status(app_module, version_id) == (
+        app_module.LocatiekaartStatus.PENDING_PRINT.value
+    )
+
+
+def test_locatiekaart_verstuur_enkel_not_found_flashes_warning(
+    app_module, monkeypatch
+):
+    send_calls = []
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda *a, **k: send_calls.append(True),
+    )
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/locatiekaart/verstuur/999999",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert send_calls == []
+    assert "Locatiekaartje niet gevonden of al verwerkt." in _flash_messages(client)
+
+
+def test_locatiekaart_verstuur_enkel_reports_failure_without_marking_printed(
+    app_module, monkeypatch
+):
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module, "test_print_service_connectivity", lambda: (True, "ok")
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda *a, **k: (False, "Printservice fout: timeout", None),
+    )
+
+    version_id = _create_pending_locatiekaart_version(app_module)
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        f"/assistent/print-queue/locatiekaart/verstuur/{version_id}",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert "A4-printaanvraag mislukt" in _flash_messages(client)
+    # Nooit stilzwijgend als verstuurd markeren wanneer het versturen mislukte.
+    assert _locatiekaart_status(app_module, version_id) == (
+        app_module.LocatiekaartStatus.PENDING_PRINT.value
+    )
+
+
+def test_locatiekaart_verstuur_selectie_sends_only_the_posted_subset(
+    app_module, monkeypatch
+):
+    sent_calls = []
+
+    def fake_send(versions, print_batch_id):
+        sent_calls.append([v.locatiekaart_versie_id for v in versions])
+        return True, None, {"cardCount": len(versions), "sheetCount": 1}
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module, "test_print_service_connectivity", lambda: (True, "ok")
+    )
+    monkeypatch.setattr(app_module, "send_location_cards_to_print_service", fake_send)
+
+    id_a = _create_pending_locatiekaart_version(
+        app_module, voorraad_positie_id=91, artikelnaam="Verband"
+    )
+    id_b = _create_pending_locatiekaart_version(
+        app_module, voorraad_positie_id=92, artikelnaam="Pleisters"
+    )
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/locatiekaart/verstuur-selectie",
+        data={"_csrf_token": "test-csrf", "locatiekaart_ids": [str(id_a)]},
+    )
+
+    assert response.status_code == 302
+    assert sent_calls == [[id_a]]
+    assert _locatiekaart_status(app_module, id_a) == (
+        app_module.LocatiekaartStatus.PRINTED.value
+    )
+    assert _locatiekaart_status(app_module, id_b) == (
+        app_module.LocatiekaartStatus.PENDING_PRINT.value
+    )
+
+
+def test_locatiekaart_verstuur_selectie_without_any_checked_row_sends_nothing(
+    app_module, monkeypatch
+):
+    send_calls = []
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda *a, **k: send_calls.append(True),
+    )
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/locatiekaart/verstuur-selectie",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert send_calls == []
+    assert "Selecteer minimaal één Locatiekaartje" in _flash_messages(client)
+
+
+def test_locatiekaart_verstuur_alles_sends_every_pending_version(
+    app_module, monkeypatch
+):
+    sent_calls = []
+
+    def fake_send(versions, print_batch_id):
+        sent_calls.append(sorted(v.locatiekaart_versie_id for v in versions))
+        return True, None, {"cardCount": len(versions), "sheetCount": 1}
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module, "test_print_service_connectivity", lambda: (True, "ok")
+    )
+    monkeypatch.setattr(app_module, "send_location_cards_to_print_service", fake_send)
+
+    with app_module.app.app_context():
+        app_module.db.session.query(app_module.LocatiekaartVersie).delete()
+        app_module.db.session.commit()
+
+    id_a = _create_pending_locatiekaart_version(app_module, voorraad_positie_id=91)
+    id_b = _create_pending_locatiekaart_version(app_module, voorraad_positie_id=92)
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/locatiekaart/verstuur-alles",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert sent_calls == [sorted([id_a, id_b])]
+
+
+def test_locatiekaart_verstuur_alles_on_empty_queue_flashes_info_and_sends_nothing(
+    app_module, monkeypatch
+):
+    send_calls = []
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda *a, **k: send_calls.append(True),
+    )
+
+    with app_module.app.app_context():
+        app_module.db.session.query(app_module.LocatiekaartVersie).delete()
+        app_module.db.session.commit()
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/locatiekaart/verstuur-alles",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert send_calls == []
+    assert "Geen openstaande Locatiekaartjes." in _flash_messages(client)
+
+
+def test_locatiekaart_annuleren_marks_cancelled_and_flashes(app_module, monkeypatch):
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+
+    version_id = _create_pending_locatiekaart_version(app_module)
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        f"/assistent/print-queue/locatiekaart/annuleren/{version_id}",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert _locatiekaart_status(app_module, version_id) == (
+        app_module.LocatiekaartStatus.CANCELLED.value
+    )
+    assert "Aanvraag geannuleerd." in _flash_messages(client)
+
+
+def test_locatiekaart_annuleren_not_found_or_already_processed_flashes_warning(
+    app_module, monkeypatch
+):
+    """Ticket #26 AC: annuleren is never a silent no-op — mirrors the same
+    fix applied to the Kanban-side annuleren_print_opdracht.
+    """
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/locatiekaart/annuleren/999999",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert "Aanvraag niet gevonden of al verwerkt." in _flash_messages(client)
 
 
 def _source_objects():
