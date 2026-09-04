@@ -2013,16 +2013,19 @@ def assistent_kamer_view(ruimte_id):
     else:
         ruimte.kleur_hex = None
 
+    # Ticket #15 AC: een vaste volgorde die niet wisselt tussen twee bezoeken
+    # — Kast.naam/Lokaal_Artikel.eigen_naam alleen geeft geen deterministieke
+    # volgorde bij gelijke namen, dus de primary key breekt de gelijkstand.
     kasten_in_kamer = db.session.query(Kast).filter_by(
         ruimte_id=ruimte_id, bedrijf_id=bedrijf_id,
-    ).order_by(Kast.naam).all()
+    ).order_by(Kast.naam, Kast.kast_id).all()
     kasten_data = {}
     for kast in kasten_in_kamer:
         inhoud = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus)\
             .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
             .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
             .filter(Voorraad_Positie.kast_id == kast.kast_id, Voorraad_Positie.bedrijf_id == bedrijf_id)\
-            .order_by(Lokaal_Artikel.eigen_naam)\
+            .order_by(Lokaal_Artikel.eigen_naam, Voorraad_Positie.voorraad_positie_id)\
             .all()
         kasten_data[kast] = inhoud
     alle_artikelen = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id).order_by(Lokaal_Artikel.eigen_naam).all()
@@ -2053,6 +2056,24 @@ def assistent_kamer_view(ruimte_id):
         ),
     )
 
+def _apply_voorraad_positie_kanban_update(positie, artikel, form):
+    """Shared core for both the classic form-POST route and the inline JSON
+    route (ticket #15): validate and apply materiaaltype/Min/Aanv., mark
+    stale Kanban-kaarten and Locatiekaartjes, and return the fresh display
+    values. Raises KanbanSettingsError on an invalid combination — callers
+    decide how to surface that (flash+redirect vs. a JSON error response).
+    """
+    old_effective = effective_position_kanban_settings(positie, artikel)
+    _set_position_kanban_values(positie, artikel, form)
+    new_effective = effective_position_kanban_settings(positie, artikel)
+    _supersede_cards_for_position(positie, old_effective, new_effective)
+    if old_effective != new_effective:
+        _supersede_locatiekaart_versions_for_position_ids(
+            [positie.voorraad_positie_id]
+        )
+    return kanban_display_values(positie, artikel)
+
+
 @app.route('/assistent/update-voorraad/<int:voorraad_positie_id>', methods=['POST'])
 def update_voorraad_positie(voorraad_positie_id):
     if not check_db():
@@ -2069,14 +2090,7 @@ def update_voorraad_positie(voorraad_positie_id):
 
     try:
         artikel = get_scoped_item(Lokaal_Artikel, positie.lokaal_artikel_id, bedrijf_id)
-        old_effective = effective_position_kanban_settings(positie, artikel)
-        _set_position_kanban_values(positie, artikel, request.form)
-        new_effective = effective_position_kanban_settings(positie, artikel)
-        _supersede_cards_for_position(positie, old_effective, new_effective)
-        if old_effective != new_effective:
-            _supersede_locatiekaart_versions_for_position_ids(
-                [positie.voorraad_positie_id]
-            )
+        _apply_voorraad_positie_kanban_update(positie, artikel, request.form)
     except KanbanSettingsError as exc:
         flash(str(exc), 'danger')
         return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
@@ -2084,6 +2098,49 @@ def update_voorraad_positie(voorraad_positie_id):
     db.session.commit()
     flash('Voorraadinstellingen bijgewerkt.', 'success')
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
+
+
+@app.route('/api/voorraad-positie/<int:voorraad_positie_id>/update', methods=['POST'])
+def api_update_voorraad_positie(voorraad_positie_id):
+    """Ticket #15: JSON counterpart of update_voorraad_positie for the
+    inline-save flow on the Ruimte-pagina — same validation/supersede logic,
+    no page navigation. Kept as its own route (matching this repo's existing
+    /api/... JSON-endpoint convention) instead of branching the classic
+    route on a header, so the original form-POST path stays completely
+    untouched.
+
+    Checks db_operational directly instead of calling check_db(): that
+    helper's flash() call is meant for a page the browser renders next, and
+    would otherwise sit in the session and leak onto whatever unrelated page
+    the assistente happens to load afterwards. The {'ok', 'error'} + real
+    HTTP status shape matches api_preview_layout, not the check_db()-based
+    api_artikel_gebruik/api_ruimte_kopieer_preview routes.
+    """
+    if not db_operational:
+        return jsonify({'ok': False, 'error': 'Geen verbinding met de database.'}), 503
+    bedrijf_id = get_huidig_bedrijf_id()
+    positie = get_scoped_item(Voorraad_Positie, voorraad_positie_id, bedrijf_id)
+    if not positie:
+        return jsonify({
+            'ok': False,
+            'error': 'Voorraadpositie niet gevonden of geen toegang.',
+        }), 404
+
+    kast = get_scoped_item(Kast, positie.kast_id, bedrijf_id)
+    if not kast:
+        return jsonify({
+            'ok': False,
+            'error': 'Opslaglocatie niet gevonden of geen toegang.',
+        }), 404
+
+    try:
+        artikel = get_scoped_item(Lokaal_Artikel, positie.lokaal_artikel_id, bedrijf_id)
+        display = _apply_voorraad_positie_kanban_update(positie, artikel, request.form)
+    except KanbanSettingsError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 422
+
+    db.session.commit()
+    return jsonify({'ok': True, **display})
 
 @app.route('/assistent/kast/<int:kast_id>/toevoegen', methods=['POST'])
 def add_to_kast_from_room(kast_id):

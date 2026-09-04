@@ -166,6 +166,164 @@ def test_position_edit_is_a_user_facing_flask_flow_for_independent_overrides(
     assert superseded_position_ids == [12]
 
 
+def test_api_position_update_saves_and_returns_display_values_as_json(
+    app_module, monkeypatch
+):
+    """Ticket #15: the inline-save JS calls this JSON counterpart of
+    update_voorraad_positie instead of the classic form-POST route — same
+    validation/supersede logic, but a JSON body and no redirect.
+    """
+    superseded_position_ids = []
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        bedrijf_id=1,
+        kast_id=4,
+        lokaal_artikel_id=7,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+    )
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9)
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        bedrijf_id=1,
+        kanban_min=1,
+        kanban_refill_quantity=1,
+    )
+    card = SimpleNamespace(status="PRINTED")
+
+    class FakeSession:
+        def query(self, *models):
+            class CardQuery:
+                def filter(self, *args, **kwargs):
+                    return self
+
+                def all(self):
+                    return [card]
+
+            return CardQuery()
+
+        def commit(self):
+            return None
+
+    def scoped_item(model, item_id, bedrijf_id):
+        return {4: kast, 7: article, 12: position}.get(item_id)
+
+    monkeypatch.setattr(app_module, "db_operational", True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", scoped_item)
+    monkeypatch.setattr(
+        app_module,
+        "_supersede_locatiekaart_versions_for_position_ids",
+        lambda position_ids: superseded_position_ids.extend(position_ids),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/api/voorraad-positie/12/update",
+        data={
+            "_csrf_token": "test-csrf",
+            "materiaaltype": "KANBAN",
+            "kanban_min_override": "5",
+            "kanban_refill_quantity_override": "2",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["ok"] is True
+    assert body["min_level"] == 5
+    assert body["refill_quantity"] == 2
+    assert body["materiaaltype"] == "KANBAN"
+    assert position.kanban_min_override == 5
+    assert position.kanban_refill_quantity_override == 2
+    assert superseded_position_ids == [12]
+
+
+def test_api_position_update_rejects_invalid_combination_with_422_json(
+    app_module, monkeypatch
+):
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        bedrijf_id=1,
+        kast_id=4,
+        lokaal_artikel_id=7,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+    )
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9)
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        bedrijf_id=1,
+        kanban_min=1,
+        kanban_refill_quantity=1,
+    )
+
+    def scoped_item(model, item_id, bedrijf_id):
+        return {4: kast, 7: article, 12: position}.get(item_id)
+
+    monkeypatch.setattr(app_module, "db_operational", True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", scoped_item)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=SimpleNamespace()))
+
+    response = _csrf_client(app_module).post(
+        "/api/voorraad-positie/12/update",
+        data={
+            "_csrf_token": "test-csrf",
+            "materiaaltype": "KANBAN",
+            "kanban_min_override": "-1",
+            "kanban_refill_quantity_override": "2",
+        },
+    )
+
+    assert response.status_code == 422
+    body = response.get_json()
+    assert body["ok"] is False
+    assert "Min" in body["error"]
+    # Een ongeldige wijziging raakt alleen deze rij — geen wijziging aan de
+    # positie is toegepast (geen setattr vóór de validatiefout).
+    assert position.kanban_min_override is None
+
+
+def test_api_position_update_not_found_returns_404_json(app_module, monkeypatch):
+    monkeypatch.setattr(app_module, "db_operational", True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: None)
+
+    response = _csrf_client(app_module).post(
+        "/api/voorraad-positie/999/update",
+        data={"_csrf_token": "test-csrf", "materiaaltype": "KANBAN"},
+    )
+
+    assert response.status_code == 404
+    body = response.get_json()
+    assert body["ok"] is False
+    assert "niet gevonden" in body["error"]
+
+
+def test_api_position_update_without_db_returns_503_json_no_flash(
+    app_module, monkeypatch
+):
+    """Unlike the classic route, this JSON endpoint must not call flash() —
+    a flash left in the session would leak into the next, unrelated page.
+    """
+    monkeypatch.setattr(app_module, "db_operational", False)
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/api/voorraad-positie/12/update",
+        data={"_csrf_token": "test-csrf", "materiaaltype": "KANBAN"},
+    )
+
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["ok"] is False
+    with client.session_transaction() as session:
+        assert session.get("_flashes", []) == []
+
+
 def test_storage_location_rename_supersedes_location_card_versions(
     app_module,
     monkeypatch,
@@ -1127,7 +1285,9 @@ def test_room_page_exposes_independent_print_actions_with_counts(
             return Query(results=content_rows)
 
     for name, fields in {
-        "Voorraad_Positie": ["lokaal_artikel_id", "kast_id", "bedrijf_id"],
+        "Voorraad_Positie": [
+            "voorraad_positie_id", "lokaal_artikel_id", "kast_id", "bedrijf_id",
+        ],
         "Lokaal_Artikel": ["lokaal_artikel_id", "global_id", "eigen_naam"],
         "Global_Catalogus": ["global_id"],
         "Kast": ["kast_id", "ruimte_id", "bedrijf_id", "naam"],
@@ -1672,7 +1832,9 @@ def test_room_page_opens_requested_kast_via_open_kast_param(app_module, monkeypa
         "Ruimte": ["ruimte_id", "bedrijf_id"],
         "Vestiging": ["vestiging_id", "bedrijf_id"],
         "Kast": ["kast_id", "ruimte_id", "bedrijf_id", "naam"],
-        "Voorraad_Positie": ["kast_id", "bedrijf_id", "lokaal_artikel_id"],
+        "Voorraad_Positie": [
+            "voorraad_positie_id", "kast_id", "bedrijf_id", "lokaal_artikel_id",
+        ],
         "Lokaal_Artikel": ["lokaal_artikel_id", "global_id", "eigen_naam"],
         "Global_Catalogus": ["global_id"],
     }.items():
@@ -2782,6 +2944,7 @@ def test_room_page_renders_effective_kanban_values(
         app_module,
         "Voorraad_Positie",
         SimpleNamespace(
+            voorraad_positie_id=FakeField(),
             lokaal_artikel_id=FakeField(),
             kast_id=FakeField(),
             bedrijf_id=FakeField(),

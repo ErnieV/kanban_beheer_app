@@ -78,7 +78,7 @@
                             {% for pos, lokaal, globaal in inhoud %}
                             {% set effectieve_kanban = effective_position_kanban_settings(pos, lokaal) %}
                             {% set afwijkende_min, afwijkende_aanv = position_kanban_override_values(pos, lokaal) %}
-                            <tr>
+                            <tr data-position-row data-position-id="{{ pos.voorraad_positie_id }}">
                                 <td>
                                     {% set img = pos.locatie_foto_url or lokaal.foto_url or (globaal and globaal.foto_url) %}
                                     {% if img %}
@@ -97,49 +97,46 @@
                                     <br>
                                     <small class="text-muted">{{ lokaal.verpakkingseenheid_tekst }}</small>
                                 </td>
-                                
-                                <form action="{{ url_for('update_voorraad_positie', voorraad_positie_id=pos.voorraad_positie_id) }}" method="POST">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                    <td>
-                                        <select name="materiaaltype" class="form-select form-select-sm" onchange="this.form.submit()">
-                                            <option value="KANBAN" {% if position_material_type(pos).value == 'KANBAN' %}selected{% endif %}>Kanban</option>
-                                            <option value="STANDAARD" {% if position_material_type(pos).value == 'STANDAARD' %}selected{% endif %}>Standaard</option>
-                                        </select>
-                                    </td>
-                                    <td>
-                                        {% if effectieve_kanban %}
-                                        <div class="input-group input-group-sm">
-                                            <input type="number" min="0" name="kanban_min_override" value="{{ effectieve_kanban.min_level if effectieve_kanban else '' }}" class="form-control form-control-sm {% if afwijkende_min is not none %}border-warning bg-warning-subtle{% endif %}" title="{% if afwijkende_min is not none %}Artikel-default: {{ article_kanban_standard(lokaal).min_level }}{% endif %}" {% if not effectieve_kanban %}disabled{% endif %} onchange="this.form.submit()">
-                                            {% if afwijkende_min is not none %}<span class="input-group-text text-warning" title="Lokale afwijking van de Artikel-Kanbanstandaard"><i class="bi bi-gear-fill"></i></span>{% endif %}
-                                        </div>
-                                        {% else %}
-                                        <span class="text-muted">—</span>
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        {% if effectieve_kanban %}
-                                        <div class="input-group input-group-sm">
-                                            <input type="number" min="1" name="kanban_refill_quantity_override" value="{{ effectieve_kanban.refill_quantity if effectieve_kanban else '' }}" class="form-control form-control-sm {% if afwijkende_aanv is not none %}border-warning bg-warning-subtle{% endif %}" title="{% if afwijkende_aanv is not none %}Artikel-default: {{ article_kanban_standard(lokaal).refill_quantity }}{% endif %}" {% if not effectieve_kanban %}disabled{% endif %} onchange="this.form.submit()">
-                                            {% if afwijkende_aanv is not none %}<span class="input-group-text text-warning" title="Lokale afwijking van de Artikel-Kanbanstandaard"><i class="bi bi-gear-fill"></i></span>{% endif %}
-                                        </div>
-                                        {% else %}
-                                        <span class="text-muted">—</span>
-                                        {% endif %}
-                                    </td>
-                                    <td class="text-center">
-                                        <div class="btn-group">
-                                            <!-- ENKEL PRINT KNOP -->
-                                            <button type="submit" formaction="{{ url_for('kanban_aanvragen_enkel', voorraad_positie_id=pos.voorraad_positie_id) }}" class="btn btn-sm btn-outline-secondary" title="{% if effectieve_kanban %}Kanban-kaartje aanvragen{% else %}Standaard materiaal heeft geen Kanban-kaart{% endif %}" {% if not effectieve_kanban %}disabled{% endif %}>
+                                <td>
+                                    <select data-field="materiaaltype" class="form-select form-select-sm">
+                                        <option value="KANBAN" {% if position_material_type(pos).value == 'KANBAN' %}selected{% endif %}>Kanban</option>
+                                        <option value="STANDAARD" {% if position_material_type(pos).value == 'STANDAARD' %}selected{% endif %}>Standaard</option>
+                                    </select>
+                                    <div class="small mt-1" data-status-for="materiaaltype"></div>
+                                </td>
+                                <td>
+                                    <div class="input-group input-group-sm">
+                                        <input type="number" min="0" data-field="kanban_min_override" value="{{ effectieve_kanban.min_level if effectieve_kanban else '' }}" class="form-control form-control-sm {% if afwijkende_min is not none %}border-warning bg-warning-subtle{% endif %}" title="Artikel-default: {{ article_kanban_standard(lokaal).min_level }}" {% if not effectieve_kanban %}disabled{% endif %}>
+                                        <span class="input-group-text text-warning" data-override-badge="kanban_min_override" title="Lokale afwijking van de Artikel-Kanbanstandaard" {% if afwijkende_min is none %}hidden{% endif %}><i class="bi bi-gear-fill"></i></span>
+                                    </div>
+                                    <div class="small mt-1" data-status-for="kanban_min_override"></div>
+                                </td>
+                                <td>
+                                    <div class="input-group input-group-sm">
+                                        <input type="number" min="1" data-field="kanban_refill_quantity_override" value="{{ effectieve_kanban.refill_quantity if effectieve_kanban else '' }}" class="form-control form-control-sm {% if afwijkende_aanv is not none %}border-warning bg-warning-subtle{% endif %}" title="Artikel-default: {{ article_kanban_standard(lokaal).refill_quantity }}" {% if not effectieve_kanban %}disabled{% endif %}>
+                                        <span class="input-group-text text-warning" data-override-badge="kanban_refill_quantity_override" title="Lokale afwijking van de Artikel-Kanbanstandaard" {% if afwijkende_aanv is none %}hidden{% endif %}><i class="bi bi-gear-fill"></i></span>
+                                    </div>
+                                    <div class="small mt-1" data-status-for="kanban_refill_quantity_override"></div>
+                                </td>
+                                <td class="text-center">
+                                    <div class="btn-group">
+                                        <!-- ENKEL PRINT KNOP -->
+                                        <form action="{{ url_for('kanban_aanvragen_enkel', voorraad_positie_id=pos.voorraad_positie_id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" data-print-enkel-button class="btn btn-sm btn-outline-secondary" title="{% if effectieve_kanban %}Kanban-kaartje aanvragen{% else %}Standaard materiaal heeft geen Kanban-kaart{% endif %}" {% if not effectieve_kanban %}disabled{% endif %}>
                                                 <i class="bi bi-printer"></i>
                                             </button>
-                                            
-                                            <!-- VERWIJDER KNOP -->
-                                            <button type="submit" formaction="{{ url_for('verwijder_item', type='voorraad', id=pos.voorraad_positie_id) }}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Verwijderen?')">
+                                        </form>
+
+                                        <!-- VERWIJDER KNOP -->
+                                        <form action="{{ url_for('verwijder_item', type='voorraad', id=pos.voorraad_positie_id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Verwijderen?')">
                                                 <i class="bi bi-trash"></i>
                                             </button>
-                                        </div>
-                                    </td>
-                                </form>
+                                        </form>
+                                    </div>
+                                </td>
                             </tr>
                             {% else %}
                             <tr><td colspan="6" class="text-center text-muted py-3">Deze kast is nog leeg.</td></tr>
@@ -173,4 +170,175 @@
     </div>
     {% endfor %}
 </div>
+
+<script>
+    // Ticket #15: inline opslaan van materiaaltype/Min/Aanv. zonder de
+    // Ruimte-pagina te herladen. Elk veld blijft, zoals voorheen,
+    // onafhankelijk van de andere twee opslaan zodra het verlaten wordt —
+    // alleen verstuurt dit nu een fetch() naar /api/voorraad-positie/<id>/
+    // update in plaats van een volledige paginanavigatie, zodat de
+    // uitgeklapte Opslaglocatie, scrollpositie en focus intact blijven (we
+    // muteren alleen het statustekstje en de disabled-state van de twee
+    // andere velden — nooit de rij zelf of de pagina).
+    const csrfToken = {{ csrf_token()|tojson }};
+    const FIELD_NAMES = ['materiaaltype', 'kanban_min_override', 'kanban_refill_quantity_override'];
+
+    function setFieldStatus(el, kind, text) {
+        if (!el) return;
+        clearTimeout(el._hideTimer);
+        el.textContent = text || '';
+        el.className = 'small mt-1 ' + (
+            kind === 'saving' ? 'text-muted'
+            : kind === 'success' ? 'text-success'
+            : kind === 'error' ? 'text-danger'
+            : ''
+        );
+        if (kind === 'success') {
+            el._hideTimer = setTimeout(() => { el.textContent = ''; el.className = 'small mt-1'; }, 3000);
+        }
+    }
+
+    function rememberSavedValues(tr) {
+        FIELD_NAMES.forEach((fieldName) => {
+            const el = tr.querySelector(`[data-field="${fieldName}"]`);
+            if (el) el.dataset.lastSavedValue = el.value;
+        });
+    }
+
+    function setOverrideBadge(tr, fieldName, isOverride) {
+        const input = tr.querySelector(`[data-field="${fieldName}"]`);
+        const badge = tr.querySelector(`[data-override-badge="${fieldName}"]`);
+        if (input) input.classList.toggle('border-warning', !!isOverride);
+        if (input) input.classList.toggle('bg-warning-subtle', !!isOverride);
+        if (badge) badge.hidden = !isOverride;
+    }
+
+    function applyDisplayValues(tr, data) {
+        const minEl = tr.querySelector('[data-field="kanban_min_override"]');
+        const aanvEl = tr.querySelector('[data-field="kanban_refill_quantity_override"]');
+        const printEnkelBtn = tr.querySelector('[data-print-enkel-button]');
+        const isStandaard = data.materiaaltype === 'STANDAARD';
+        if (minEl) {
+            minEl.disabled = isStandaard;
+            minEl.value = isStandaard ? '' : data.min_level;
+        }
+        if (aanvEl) {
+            aanvEl.disabled = isStandaard;
+            aanvEl.value = isStandaard ? '' : data.refill_quantity;
+        }
+        if (printEnkelBtn) printEnkelBtn.disabled = isStandaard;
+        // Houd de 'afwijkt van Artikel-standaard'-badge in sync — anders
+        // blijft die (net als vóór ticket #15) staan op wat er bij de
+        // laatste volledige paginalaad gold.
+        setOverrideBadge(tr, 'kanban_min_override', !isStandaard && data.min_is_override);
+        setOverrideBadge(tr, 'kanban_refill_quantity_override', !isStandaard && data.refill_is_override);
+    }
+
+    // Twee onafhankelijke tellers per rij:
+    // - fieldTokens: welke respons per VELD nog "de laatst verstuurde" is —
+    //   bepaalt of het statustekstje van dát veld wordt bijgewerkt. Zo
+    //   verliest bijvoorbeeld een Aanv.-wijziging niet stilzwijgend zijn
+    //   eigen bevestiging alleen omdat de Min-wijziging in dezelfde rij
+    //   ondertussen ook een nieuw verzoek startte.
+    // - rowToken: de laatst verstuurde wijziging van de HELE rij — bepaalt
+    //   of een respons de weergegeven materiaaltype/Min/Aanv.-waarden mag
+    //   bijwerken, zodat een trager, ouder antwoord nooit een sneller,
+    //   nieuwer antwoord se data overschrijft.
+    function nextFieldToken(tr, fieldName) {
+        if (!tr._fieldTokens) tr._fieldTokens = {};
+        const next = (tr._fieldTokens[fieldName] || 0) + 1;
+        tr._fieldTokens[fieldName] = next;
+        return next;
+    }
+
+    function isLatestFieldToken(tr, fieldName, token) {
+        return tr._fieldTokens && tr._fieldTokens[fieldName] === token;
+    }
+
+    function nextRowToken(tr) {
+        tr._rowToken = (tr._rowToken || 0) + 1;
+        return tr._rowToken;
+    }
+
+    function isLatestRowToken(tr, token) {
+        return (tr._rowToken || 0) === token;
+    }
+
+    async function saveRow(tr, fieldName) {
+        const myFieldToken = nextFieldToken(tr, fieldName);
+        const myRowToken = nextRowToken(tr);
+        const el = tr.querySelector(`[data-field="${fieldName}"]`);
+        const statusEl = tr.querySelector(`[data-status-for="${fieldName}"]`);
+        setFieldStatus(statusEl, 'saving', 'Opslaan…');
+
+        const positionId = tr.dataset.positionId;
+        const body = new FormData();
+        body.set('_csrf_token', csrfToken);
+        FIELD_NAMES.forEach((name) => {
+            const fieldEl = tr.querySelector(`[data-field="${name}"]`);
+            if (fieldEl) body.set(name, fieldEl.value);
+        });
+
+        let response;
+        try {
+            response = await fetch(`/api/voorraad-positie/${positionId}/update`, {
+                method: 'POST',
+                body,
+            });
+        } catch (networkError) {
+            if (!isLatestFieldToken(tr, fieldName, myFieldToken)) return;
+            setFieldStatus(statusEl, 'error', 'Netwerkfout — probeer opnieuw.');
+            if (el) el.focus();
+            return;
+        }
+
+        let data;
+        try {
+            data = await response.json();
+        } catch (parseError) {
+            if (!isLatestFieldToken(tr, fieldName, myFieldToken)) return;
+            setFieldStatus(statusEl, 'error', 'Onverwacht antwoord van de server.');
+            if (el) el.focus();
+            return;
+        }
+
+        if (!response.ok || !data.ok) {
+            // Een verouderd verzoek op HETZELFDE veld mag de status niet
+            // overschrijven met een inmiddels achterhaalde fout.
+            if (!isLatestFieldToken(tr, fieldName, myFieldToken)) return;
+            setFieldStatus(statusEl, 'error', data.error || 'Opslaan mislukt.');
+            // Bij een ongeldige wijziging gaat de aandacht terug naar het
+            // veld dat gecorrigeerd moet worden.
+            if (el) el.focus();
+            return;
+        }
+
+        // De weergegeven waarden komen alleen van het meest recent
+        // VERSTUURDE verzoek voor deze rij — een trager, ouder antwoord mag
+        // een al toegepast nieuwer antwoord niet meer overschrijven.
+        if (isLatestRowToken(tr, myRowToken)) {
+            applyDisplayValues(tr, data);
+        }
+        rememberSavedValues(tr);
+        if (isLatestFieldToken(tr, fieldName, myFieldToken)) {
+            setFieldStatus(statusEl, 'success', 'Opgeslagen');
+        }
+    }
+
+    document.querySelectorAll('[data-position-row]').forEach((tr) => {
+        FIELD_NAMES.forEach((fieldName) => {
+            const el = tr.querySelector(`[data-field="${fieldName}"]`);
+            if (!el) return;
+            el.dataset.lastSavedValue = el.value;
+            el.addEventListener('change', () => {
+                if (el.value === el.dataset.lastSavedValue) {
+                    // Teruggezet naar de bevestigde waarde: niets opslaan,
+                    // geen wijzigingsstatus tonen.
+                    return;
+                }
+                saveRow(tr, fieldName);
+            });
+        });
+    });
+</script>
 {% endblock %}
