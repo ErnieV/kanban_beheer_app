@@ -292,6 +292,7 @@ def test_storage_location_kanban_print_selection_filters_and_validates_assets(
     room = SimpleNamespace(ruimte_id=9, naam="Behandelkamer", nummer="1")
     room_type = SimpleNamespace(ruimte_type_id=8, naam="Behandeling", kleur_hex="#123456")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    branch = SimpleNamespace(naam="Vestiging")
     valid_position = SimpleNamespace(
         voorraad_positie_id=12,
         materiaaltype="KANBAN",
@@ -338,9 +339,9 @@ def test_storage_location_kanban_print_selection_filters_and_validates_assets(
         kanban_refill_quantity=4,
     )
     rows = [
-        (valid_position, valid_article, None, kast, room, room_type, company),
-        (standard_position, standard_article, None, kast, room, room_type, company),
-        (invalid_position, invalid_article, None, kast, room, room_type, company),
+        (valid_position, valid_article, None, kast, room, room_type, company, branch),
+        (standard_position, standard_article, None, kast, room, room_type, company, branch),
+        (invalid_position, invalid_article, None, kast, room, room_type, company, branch),
     ]
 
     class FakeField:
@@ -432,6 +433,7 @@ def test_storage_location_print_only_processes_selected_valid_items(
 ):
     kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    branch = SimpleNamespace(naam="Vestiging")
     room = SimpleNamespace(naam="Behandelkamer", nummer=None)
     room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
     valid_position = SimpleNamespace(
@@ -467,8 +469,8 @@ def test_storage_location_print_only_processes_selected_valid_items(
         kanban_refill_quantity=4,
     )
     rows = [
-        (valid_position, valid_article, None, kast, room, room_type, company),
-        (invalid_position, invalid_article, None, kast, room, room_type, company),
+        (valid_position, valid_article, None, kast, room, room_type, company, branch),
+        (invalid_position, invalid_article, None, kast, room, room_type, company, branch),
     ]
     added = []
     created_rows = []
@@ -517,6 +519,7 @@ def test_location_print_selection_creates_only_selected_location_versions(
 ):
     kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    branch = SimpleNamespace(naam="Vestiging")
     room = SimpleNamespace(naam="Behandelkamer", nummer=None)
     room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
     position = SimpleNamespace(
@@ -535,7 +538,7 @@ def test_location_print_selection_creates_only_selected_location_versions(
         kanban_min=3,
         kanban_refill_quantity=4,
     )
-    row = (position, article, None, kast, room, room_type, company)
+    row = (position, article, None, kast, room, room_type, company, branch)
     created_rows = []
     version = SimpleNamespace(
         status="PENDING_PRINT",
@@ -641,6 +644,7 @@ def _room_print_rows():
     )
     room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    branch = SimpleNamespace(naam="Vestiging")
     kast_a = SimpleNamespace(kast_id=4, naam="Kast A", ruimte_id=9)
     kast_z = SimpleNamespace(kast_id=5, naam="Kast Z", ruimte_id=9)
 
@@ -672,6 +676,7 @@ def _room_print_rows():
             room,
             room_type,
             company,
+            branch,
         ),
         (
             position(102, "KANBAN"),
@@ -681,6 +686,7 @@ def _room_print_rows():
             room,
             room_type,
             company,
+            branch,
         ),
         (
             position(103, "STANDAARD"),
@@ -690,6 +696,7 @@ def _room_print_rows():
             room,
             room_type,
             company,
+            branch,
         ),
         (
             position(104, "KANBAN"),
@@ -699,6 +706,7 @@ def _room_print_rows():
             room,
             room_type,
             company,
+            branch,
         ),
     ]
 
@@ -997,6 +1005,7 @@ def _two_item_kast_fixture():
     room = SimpleNamespace(naam="Behandelkamer", nummer=None)
     room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    branch = SimpleNamespace(naam="Vestiging")
 
     def position(position_id):
         return SimpleNamespace(
@@ -1019,8 +1028,8 @@ def _two_item_kast_fixture():
         )
 
     rows = [
-        (position(13), article(13, "Naaldencontainer"), None, kast, room, room_type, company),
-        (position(14), article(14, "Pulseoximeter"), None, kast, room, room_type, company),
+        (position(13), article(13, "Naaldencontainer"), None, kast, room, room_type, company, branch),
+        (position(14), article(14, "Pulseoximeter"), None, kast, room, room_type, company, branch),
     ]
     return kast, rows
 

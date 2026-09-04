@@ -1725,6 +1725,7 @@ def _kast_inventory_query(kast_id, bedrijf_id):
         Ruimte,
         Ruimte_Type,
         Bedrijf,
+        Vestiging,
     )):
         return db.session.query(
             Voorraad_Positie,
@@ -1749,6 +1750,7 @@ def _kast_inventory_query(kast_id, bedrijf_id):
         Ruimte,
         Ruimte_Type,
         Bedrijf,
+        Vestiging,
     ).join(
         Lokaal_Artikel,
         Voorraad_Positie.lokaal_artikel_id
@@ -1768,6 +1770,9 @@ def _kast_inventory_query(kast_id, bedrijf_id):
     ).join(
         Bedrijf,
         Voorraad_Positie.bedrijf_id == Bedrijf.bedrijf_id,
+    ).join(
+        Vestiging,
+        Ruimte.vestiging_id == Vestiging.vestiging_id,
     ).filter(
         Voorraad_Positie.kast_id == kast_id,
         Voorraad_Positie.bedrijf_id == bedrijf_id,
@@ -1783,6 +1788,7 @@ def _ruimte_inventory_query(ruimte_id, bedrijf_id):
         Ruimte,
         Ruimte_Type,
         Bedrijf,
+        Vestiging,
     ).join(
         Lokaal_Artikel,
         Voorraad_Positie.lokaal_artikel_id
@@ -1802,6 +1808,9 @@ def _ruimte_inventory_query(ruimte_id, bedrijf_id):
     ).join(
         Bedrijf,
         Voorraad_Positie.bedrijf_id == Bedrijf.bedrijf_id,
+    ).join(
+        Vestiging,
+        Ruimte.vestiging_id == Vestiging.vestiging_id,
     ).filter(
         Kast.ruimte_id == ruimte_id,
         Voorraad_Positie.bedrijf_id == bedrijf_id,
@@ -1809,7 +1818,7 @@ def _ruimte_inventory_query(ruimte_id, bedrijf_id):
 
 
 def _storage_location_print_item(row, kaart_type):
-    position, article, global_item, kast, room, room_type, company = row
+    position, article, global_item, kast, room, room_type, company, _branch = row
     material_type = _position_material_type(position)
     effective = effective_position_kanban_settings(position, article)
     article_name = (
@@ -2155,7 +2164,9 @@ def kast_print_selectie(kast_id, kaart_type):
             if kaart_type == 'kanban':
                 for item in selected_items:
                     row = rows_by_position_id[item['position_id']]
-                    db.session.add(create_queue_item(*row))
+                    # row's trailing Vestiging is only needed by
+                    # create_or_reuse_locatiekaart_version below.
+                    db.session.add(create_queue_item(*row[:7]))
                 db.session.commit()
                 flash(
                     f'{len(selected_items)} Kanban-kaartje'
@@ -2287,7 +2298,9 @@ def ruimte_print_selectie(ruimte_id, kaart_type):
             if kaart_type == 'kanban':
                 for item in selected_items:
                     row = rows_by_position_id[item['position_id']]
-                    db.session.add(create_queue_item(*row))
+                    # row's trailing Vestiging is only needed by
+                    # create_or_reuse_locatiekaart_version below.
+                    db.session.add(create_queue_item(*row[:7]))
                 db.session.commit()
                 kaartje_label = _print_selection_label(kaart_type, singular=True)
                 kaartje_meervoud = 's' if len(selected_items) != 1 else ''
