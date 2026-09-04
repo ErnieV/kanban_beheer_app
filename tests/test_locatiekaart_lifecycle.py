@@ -126,6 +126,48 @@ def test_location_card_version_reuses_unchanged_content_and_supersedes_changed_c
     assert changed_min == 6
 
 
+def test_reselecting_an_unchanged_printed_version_returns_it_to_the_queue(
+    app_module,
+):
+    """Ticket #25 / ADR 0003: printing is now deferred to the Printwachtrij.
+    A deliberately re-requested, content-unchanged Locatiekaart that was
+    already PRINTED must come back as PENDING_PRINT — otherwise the
+    aanvraag flash would report success while nothing is actually queued.
+    """
+    position, article, global_item, storage_location, room, room_type, company, branch = (
+        _source_objects()
+    )
+
+    with app_module.app.app_context():
+        app_module.db.session.query(app_module.LocatiekaartVersie).delete()
+        app_module.db.session.commit()
+
+        version, _ = app_module.create_or_reuse_locatiekaart_version(
+            position, article, global_item, storage_location, room, room_type,
+            company, branch,
+        )
+        app_module.db.session.flush()
+        first_id = version.locatiekaart_versie_id
+        app_module.mark_locatiekaart_version_printed(version)
+        status_after_print = version.status  # lees vóór commit, niet erna
+        app_module.db.session.commit()
+
+        reselected, created = app_module.create_or_reuse_locatiekaart_version(
+            position, article, global_item, storage_location, room, room_type,
+            company, branch,
+        )
+        reselected_id = reselected.locatiekaart_versie_id
+        reselected_status = reselected.status
+        reselected_printed_at = reselected.printed_at
+        app_module.db.session.commit()
+
+    assert status_after_print == LocatiekaartStatus.PRINTED.value
+    assert reselected_id == first_id  # dezelfde rij, geen nieuwe
+    assert created is False
+    assert reselected_status == LocatiekaartStatus.PENDING_PRINT.value
+    assert reselected_printed_at is None
+
+
 def test_location_card_status_transitions_match_print_acceptance(app_module):
     pending = SimpleNamespace(
         status=LocatiekaartStatus.PENDING_PRINT.value,

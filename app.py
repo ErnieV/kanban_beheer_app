@@ -599,7 +599,12 @@ def create_or_reuse_locatiekaart_version(
     company,
     branch,
 ):
-    """Reuse the active version or create a pending version for new content."""
+    """Reuse the active version or create a pending version for new content.
+
+    A deliberate reselection of an unchanged version that was already
+    PRINTED flips it back to PENDING_PRINT (ticket #25 / ADR 0003) — the
+    caller always gets something visibly queued back, never a silent no-op.
+    """
     content = build_locatiekaart_content(
         position,
         article,
@@ -622,7 +627,16 @@ def create_or_reuse_locatiekaart_version(
         LocatiekaartVersie.locatiekaart_versie_id.desc(),
     ).all()
     if active_versions and active_versions[0].inhoud_hash == content.fingerprint:
-        return active_versions[0], False
+        version = active_versions[0]
+        if version.status == LocatiekaartStatus.PRINTED.value:
+            # Ticket #25 / ADR 0003: the caller deliberately re-selected this
+            # unchanged card. Since printing is now deferred to the
+            # Printwachtrij, silently returning the already-PRINTED version
+            # would leave the queue empty while the flash still reports
+            # success — put it back in the queue instead.
+            version.status = LocatiekaartStatus.PENDING_PRINT.value
+            version.printed_at = None
+        return version, False
 
     _mark_locatiekaart_versions_superseded(active_versions)
     version = LocatiekaartVersie(
@@ -1891,20 +1905,6 @@ def _print_selection_label(kaart_type, singular=False):
     return 'Locatiekaartje' if singular else 'Locatiekaartjes'
 
 
-def _resolve_locatie_print_batch_id(selected_ids):
-    """Reuse the submitted printBatchId only when retrying the same selection.
-
-    A changed selection always gets a fresh batch id, so a stale retry can't
-    be silently deduped by the print service against different content.
-    """
-    current_selection = ','.join(str(position_id) for position_id in sorted(selected_ids))
-    submitted_batch_id = request.form.get('printBatchId', '').strip()
-    submitted_selection = request.form.get('printBatchSelection', '')
-    if submitted_batch_id and submitted_selection == current_selection:
-        return submitted_batch_id, current_selection
-    return str(uuid.uuid4()), current_selection
-
-
 _HEX_COLOR_PATTERN = re.compile(r'^#[0-9A-Fa-f]{6}$')
 
 
@@ -1916,6 +1916,13 @@ def _send_locatiekaart_batch(location_versions, print_batch_id):
     per-article instead of failing the whole batch. Returns (sent, error,
     metadata, skipped), where skipped is a list of (artikelnaam, reason)
     tuples.
+
+    Not called from any route as of ticket #25: printing Locatiekaartjes now
+    only queues a PENDING_PRINT version (see create_or_reuse_locatiekaart_
+    version); this function becomes the 'versturen'-action inside the
+    Printwachtrij, built in ticket #26 (see ADR 0003). Its own tests in
+    tests/test_location_print_contract.py are what keep it exercised until
+    then — do not treat it as dead code.
     """
     printable_versions = []
     skipped = []
@@ -2165,8 +2172,6 @@ def print_selectie(kaart_type, kast_id=None, ruimte_id=None):
     applicable_items = [item for item in selection_items if item['applicable']]
     valid_items = [item for item in applicable_items if item['valid']]
     selected_ids = None
-    print_batch_id = ''
-    print_batch_selection = ''
 
     def render(selected_ids):
         return render_template(
@@ -2180,8 +2185,6 @@ def print_selectie(kaart_type, kast_id=None, ruimte_id=None):
             applicable_count=len(applicable_items),
             valid_count=len(valid_items),
             selected_ids=selected_ids,
-            print_batch_id=print_batch_id,
-            print_batch_selection=print_batch_selection,
         )
 
     if request.method == 'POST':
@@ -2194,10 +2197,6 @@ def print_selectie(kaart_type, kast_id=None, ruimte_id=None):
             item for item in valid_items
             if item['position_id'] in selected_ids
         ]
-        if kaart_type == 'locatie':
-            print_batch_id, print_batch_selection = _resolve_locatie_print_batch_id(
-                selected_ids,
-            )
         if not selected_items:
             flash('Selecteer minimaal één geldig Artikel om te printen.', 'warning')
             # Re-render with whatever was actually submitted (selected_ids),
@@ -2210,54 +2209,33 @@ def print_selectie(kaart_type, kast_id=None, ruimte_id=None):
             return render(selected_ids)
 
         try:
+            # Ticket #25 / ADR 0003: aanvragen klaart alleen de selectie
+            # klaar in de Printwachtrij — er wordt hier nooit meteen
+            # geprint. Beide kaartsoorten volgen daardoor exact dezelfde
+            # werkstroom: selecteren → in wachtrij zetten → (elders, in de
+            # wachtrij) versturen.
             if kaart_type == 'kanban':
                 for item in selected_items:
                     row = rows_by_position_id[item['position_id']]
                     # row's trailing Vestiging is only needed by
                     # create_or_reuse_locatiekaart_version below.
                     db.session.add(create_queue_item(*row[:7]))
-                db.session.commit()
-                kaartje_label = _print_selection_label(kaart_type, singular=True)
-                kaartje_meervoud = 's' if len(selected_items) != 1 else ''
-                flash(
-                    f'{len(selected_items)} {kaartje_label}{kaartje_meervoud} aangevraagd.',
-                    'success',
-                )
-                return redirect(url_for('assistent_kamer_view', ruimte_id=target_ruimte_id))
-
-            location_versions = []
-            for item in selected_items:
-                row = rows_by_position_id[item['position_id']]
-                version, _ = create_or_reuse_locatiekaart_version(*row)
-                location_versions.append(version)
-
-            # Persist pending versions before calling the external service so a
-            # failed request can be retried without losing the snapshot.
+            else:
+                for item in selected_items:
+                    row = rows_by_position_id[item['position_id']]
+                    create_or_reuse_locatiekaart_version(*row)
             db.session.commit()
-            sent, error, metadata, skipped = _send_locatiekaart_batch(
-                location_versions,
-                print_batch_id,
-            )
-            if not sent:
-                flash(f'A4-printaanvraag mislukt: {error}', 'danger')
-                return render(selected_ids)
-
-            if skipped:
-                flash(
-                    f'{len(skipped)} kaartje(s) overgeslagen: '
-                    + '; '.join(f'{name} ({reason})' for name, reason in skipped),
-                    'warning',
-                )
+            kaartje_label = _print_selection_label(kaart_type, singular=True)
+            kaartje_meervoud = 's' if len(selected_items) != 1 else ''
             flash(
-                f'A4-printbatch {metadata["printBatchId"]} geaccepteerd: '
-                f'{metadata["cardCount"]} kaartje(s), '
-                f'{metadata["sheetCount"]} vel(len), job {metadata["jobId"]}.',
+                f'{len(selected_items)} {kaartje_label}{kaartje_meervoud} '
+                'klaargezet in de printwachtrij.',
                 'success',
             )
             return redirect(url_for('assistent_kamer_view', ruimte_id=target_ruimte_id))
         except Exception as exc:
             db.session.rollback()
-            flash(f'Fout bij printaanvraag: {exc}', 'danger')
+            flash(f'Fout bij aanvragen: {exc}', 'danger')
             return render(selected_ids)
 
     if selected_ids is None:

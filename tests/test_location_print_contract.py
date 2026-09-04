@@ -434,3 +434,36 @@ def test_send_locatiekaart_batch_skips_cards_missing_room_type_name_or_color(
         "Kamertype-kleur ontbreekt of is ongeldig.",
     ) in skipped
     assert commits == [True]
+
+
+def test_send_locatiekaart_batch_fails_when_all_selected_cards_are_unprintable(
+    app_module,
+    monkeypatch,
+):
+    """Route-level regression from before ticket #25 moved this: when every
+    selected Locatiekaart lacks the data it needs (here: no artikelfoto),
+    _send_locatiekaart_batch must report failure and not call the print
+    service at all — no partial batch is ever sent with zero cards in it.
+    """
+    unprintable = _location_card_version(
+        locatiekaart_versie_id=1,
+        artikelnaam="Naaldencontainer",
+        artikel_foto_url=None,
+    )
+
+    send_calls = []
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda *args, **kwargs: send_calls.append(True),
+    )
+
+    sent, error, metadata, skipped = app_module._send_locatiekaart_batch(
+        [unprintable], "batch-1",
+    )
+
+    assert sent is False
+    assert send_calls == []
+    assert metadata is None
+    assert "Geen enkele kaart is printbaar" in error
+    assert ("Naaldencontainer", "Artikel-foto ontbreekt.") in skipped

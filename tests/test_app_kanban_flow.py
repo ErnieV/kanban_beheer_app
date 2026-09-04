@@ -562,6 +562,12 @@ def test_location_print_selection_creates_only_selected_location_versions(
         def rollback(self):
             return None
 
+    def fail_if_send_is_called(*args, **kwargs):
+        raise AssertionError(
+            "Ticket #25: aanvragen mag de printservice niet meer aanroepen — "
+            "alleen klaarzetten in de wachtrij."
+        )
+
     monkeypatch.setattr(app_module, "check_db", lambda: True)
     monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
     monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
@@ -572,34 +578,23 @@ def test_location_print_selection_creates_only_selected_location_versions(
         lambda *source_row: created_rows.append(source_row) or (version, True),
     )
     monkeypatch.setattr(
-        app_module,
-        "send_location_cards_to_print_service",
-        lambda versions, print_batch_id: (
-            True,
-            None,
-            {
-                "printBatchId": print_batch_id,
-                "jobId": "job-1",
-                "status": "ACCEPTED",
-                "cardCount": len(versions),
-                "sheetCount": 1,
-            },
-        ),
+        app_module, "send_location_cards_to_print_service", fail_if_send_is_called,
     )
     monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
 
-    response = _csrf_client(app_module).post(
+    client = _csrf_client(app_module)
+    response = client.post(
         "/assistent/kast/4/print/locatie",
-        data={
-            "_csrf_token": "test-csrf",
-            "position_ids": ["13"],
-            "printBatchId": "batch-1",
-        },
+        data={"_csrf_token": "test-csrf", "position_ids": ["13"]},
     )
 
     assert response.status_code == 302
     assert [source_row[0].voorraad_positie_id for source_row in created_rows] == [13]
-    assert version.status == "PRINTED"
+    assert version.status == "PENDING_PRINT"  # niet PRINTED — er is niets verstuurd
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "1 Locatiekaartje klaargezet in de printwachtrij." in flash_messages
 
 
 @pytest.mark.parametrize(
@@ -780,6 +775,30 @@ def test_room_print_selection_collects_and_orders_all_storage_locations(
     assert "Aanv." not in html
     assert re.search(r'value="103"\s+checked', html)
     assert re.search(r'value="104"\s+disabled', html)
+
+
+def test_locatie_print_selection_has_no_hidden_batch_fields(app_module, monkeypatch):
+    """Ticket #25 AC: 'Er zijn geen verborgen formuliervelden meer nodig om
+    een print-batch-identiteit tussen selectiepogingen vast te houden.'
+    The batch id now only exists at send time (fase 3, in de Printwachtrij).
+    """
+    room, rows = _room_print_rows()
+
+    class FakeQuery:
+        def all(self):
+            return rows
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: room)
+    monkeypatch.setattr(app_module, "_ruimte_inventory_query", lambda *args: FakeQuery())
+
+    response = _csrf_client(app_module).get("/assistent/kamer/9/print/locatie")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'name="printBatchId"' not in html
+    assert 'name="printBatchSelection"' not in html
 
 
 def test_room_print_selection_groups_items_by_storage_location(app_module, monkeypatch):
@@ -1018,26 +1037,19 @@ def test_room_location_print_selection_processes_selected_standard_and_kanban(
             True,
         ),
     )
+    def fail_if_send_is_called(*args, **kwargs):
+        raise AssertionError(
+            "Ticket #25: aanvragen mag de printservice niet meer aanroepen — "
+            "alleen klaarzetten in de wachtrij."
+        )
+
     monkeypatch.setattr(
-        app_module,
-        "send_location_cards_to_print_service",
-        lambda selected_versions, print_batch_id: sent.append(
-            (selected_versions, print_batch_id)
-        ) or (
-            True,
-            None,
-            {
-                "printBatchId": print_batch_id,
-                "jobId": "job-2",
-                "status": "ACCEPTED",
-                "cardCount": len(selected_versions),
-                "sheetCount": 1,
-            }
-        ),
+        app_module, "send_location_cards_to_print_service", fail_if_send_is_called,
     )
     monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
 
-    response = _csrf_client(app_module).post(
+    client = _csrf_client(app_module)
+    response = client.post(
         "/assistent/kamer/9/print/locatie",
         data={
             "_csrf_token": "test-csrf",
@@ -1047,12 +1059,13 @@ def test_room_location_print_selection_processes_selected_standard_and_kanban(
 
     assert response.status_code == 302
     assert [row[0].voorraad_positie_id for row in created_rows] == [103, 101]
-    assert [version.status for version in versions.values() if version.printed_at] == [
-        "PRINTED",
-        "PRINTED",
-    ]
-    assert len(sent) == 1
-    assert sent[0][1]
+    # Geen enkele versie krijgt hier een printed_at — er is niets verstuurd.
+    assert all(version.printed_at is None for version in versions.values())
+    assert len(sent) == 0
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "2 Locatiekaartjes klaargezet in de printwachtrij." in flash_messages
 
 
 def test_room_page_exposes_independent_print_actions_with_counts(
@@ -1173,369 +1186,6 @@ def _two_item_kast_fixture():
         (position(14), article(14, "Pulseoximeter"), None, kast, room, room_type, company, branch),
     ]
     return kast, rows
-
-
-def test_storage_location_location_print_marks_versions_printed_after_acceptance(
-    app_module,
-    monkeypatch,
-):
-    kast, rows = _two_item_kast_fixture()
-    row = rows[0]
-    version = SimpleNamespace(
-        status="PENDING_PRINT",
-        printed_at=None,
-        cancelled_at=None,
-        artikelnaam="Naaldencontainer",
-        artikel_foto_url="data:image/png;base64,QUJD",
-        bedrijfslogo_url="data:image/png;base64,REVG",
-        kamertype_naam="Behandeling",
-        kamertype_kleur="#123456",
-    )
-    created = []
-    sent = []
-    commits = []
-
-    class FakeQuery:
-        def all(self):
-            return [row]
-
-    class FakeSession:
-        def commit(self):
-            commits.append(True)
-
-        def rollback(self):
-            return None
-
-    monkeypatch.setattr(app_module, "check_db", lambda: True)
-    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
-    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
-    monkeypatch.setattr(
-        app_module,
-        "create_or_reuse_locatiekaart_version",
-        lambda *source_row: created.append(source_row) or (version, True),
-    )
-    monkeypatch.setattr(
-        app_module,
-        "send_location_cards_to_print_service",
-        lambda versions, print_batch_id: sent.append((versions, print_batch_id))
-        or (
-            True,
-            None,
-            {
-                "printBatchId": print_batch_id,
-                "jobId": "job-1",
-                "status": "ACCEPTED",
-                "cardCount": 1,
-                "sheetCount": 1,
-            }
-        ),
-    )
-    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
-
-    response = _csrf_client(app_module).post(
-        "/assistent/kast/4/print/locatie",
-        data={
-            "_csrf_token": "test-csrf",
-            "position_ids": ["13"],
-            "printBatchId": "batch-1",
-            "printBatchSelection": "13",
-        },
-    )
-
-    assert response.status_code == 302
-    assert [source_row[0].voorraad_positie_id for source_row in created] == [13]
-    assert sent == [([version], "batch-1")]
-    assert version.status == "PRINTED"
-    assert version.printed_at is not None
-    assert len(commits) == 2
-
-
-def test_storage_location_location_print_keeps_pending_on_service_failure(
-    app_module,
-    monkeypatch,
-):
-    kast, rows = _two_item_kast_fixture()
-    row = rows[0]
-    version = SimpleNamespace(
-        status="PENDING_PRINT",
-        printed_at=None,
-        cancelled_at=None,
-        artikelnaam="Naaldencontainer",
-        artikel_foto_url="data:image/png;base64,QUJD",
-        bedrijfslogo_url="data:image/png;base64,REVG",
-        kamertype_naam="Behandeling",
-        kamertype_kleur="#123456",
-    )
-    commits = []
-
-    class FakeQuery:
-        def all(self):
-            return [row]
-
-    class FakeSession:
-        def commit(self):
-            commits.append(True)
-
-        def rollback(self):
-            return None
-
-    monkeypatch.setattr(app_module, "check_db", lambda: True)
-    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
-    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
-    monkeypatch.setattr(
-        app_module,
-        "create_or_reuse_locatiekaart_version",
-        lambda *source_row: (version, True),
-    )
-    monkeypatch.setattr(
-        app_module,
-        "send_location_cards_to_print_service",
-        lambda versions, print_batch_id: (False, "A4-service offline", None),
-    )
-    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
-
-    response = _csrf_client(app_module).post(
-        "/assistent/kast/4/print/locatie",
-        data={
-            "_csrf_token": "test-csrf",
-            "position_ids": ["13"],
-            "printBatchId": "retry-batch",
-            "printBatchSelection": "13",
-        },
-    )
-
-    assert response.status_code == 200
-    html = response.get_data(as_text=True)
-    assert "A4-service offline" in html
-    assert version.status == "PENDING_PRINT"
-    assert 'name="printBatchId" value="retry-batch"' in html
-    assert 'name="printBatchSelection" value="13"' in html
-    assert len(commits) == 1
-
-
-def test_storage_location_location_print_skips_articles_with_unresolvable_images_but_prints_rest(
-    app_module,
-    monkeypatch,
-):
-    kast, rows = _two_item_kast_fixture()
-    versions = {
-        13: SimpleNamespace(
-            status="PENDING_PRINT",
-            printed_at=None,
-            cancelled_at=None,
-            artikelnaam="Naaldencontainer",
-            artikel_foto_url="data:image/png;base64,QUJD",
-            bedrijfslogo_url="data:image/png;base64,REVG",
-            kamertype_naam="Behandeling",
-            kamertype_kleur="#123456",
-        ),
-        14: SimpleNamespace(
-            status="PENDING_PRINT",
-            printed_at=None,
-            cancelled_at=None,
-            artikelnaam="Pulseoximeter",
-            artikel_foto_url=None,
-            bedrijfslogo_url="data:image/png;base64,REVG",
-            kamertype_naam="Behandeling",
-            kamertype_kleur="#123456",
-        ),
-    }
-    sent = []
-    commits = []
-
-    class FakeQuery:
-        def all(self):
-            return rows
-
-    class FakeSession:
-        def commit(self):
-            commits.append(True)
-
-        def rollback(self):
-            return None
-
-    monkeypatch.setattr(app_module, "check_db", lambda: True)
-    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
-    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
-    monkeypatch.setattr(
-        app_module,
-        "create_or_reuse_locatiekaart_version",
-        lambda *source_row: (versions[source_row[0].voorraad_positie_id], True),
-    )
-    monkeypatch.setattr(
-        app_module,
-        "send_location_cards_to_print_service",
-        lambda selected_versions, print_batch_id: sent.append(
-            (selected_versions, print_batch_id)
-        ) or (
-            True,
-            None,
-            {
-                "printBatchId": print_batch_id,
-                "jobId": "job-3",
-                "status": "ACCEPTED",
-                "cardCount": len(selected_versions),
-                "sheetCount": 1,
-            },
-        ),
-    )
-    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
-
-    client = _csrf_client(app_module)
-    response = client.post(
-        "/assistent/kast/4/print/locatie",
-        data={
-            "_csrf_token": "test-csrf",
-            "position_ids": ["13", "14"],
-        },
-    )
-
-    assert response.status_code == 302
-    assert len(sent) == 1
-    assert sent[0][0] == [versions[13]]
-    assert versions[13].status == "PRINTED"
-    assert versions[14].status == "PENDING_PRINT"
-    with client.session_transaction() as session:
-        flashes = session.get("_flashes", [])
-    flash_messages = " ".join(message for _, message in flashes)
-    assert "1 kaartje(s) overgeslagen" in flash_messages
-    assert "Pulseoximeter" in flash_messages
-
-
-def test_storage_location_location_print_fails_when_all_selected_cards_are_unprintable(
-    app_module,
-    monkeypatch,
-):
-    kast, rows = _two_item_kast_fixture()
-    version = SimpleNamespace(
-        status="PENDING_PRINT",
-        printed_at=None,
-        cancelled_at=None,
-        artikelnaam="Naaldencontainer",
-        artikel_foto_url=None,
-        bedrijfslogo_url="data:image/png;base64,REVG",
-        kamertype_naam="Behandeling",
-        kamertype_kleur="#123456",
-    )
-    send_calls = []
-    commits = []
-
-    class FakeQuery:
-        def all(self):
-            return rows[:1]
-
-    class FakeSession:
-        def commit(self):
-            commits.append(True)
-
-        def rollback(self):
-            return None
-
-    monkeypatch.setattr(app_module, "check_db", lambda: True)
-    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
-    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
-    monkeypatch.setattr(
-        app_module,
-        "create_or_reuse_locatiekaart_version",
-        lambda *source_row: (version, True),
-    )
-    monkeypatch.setattr(
-        app_module,
-        "send_location_cards_to_print_service",
-        lambda *args, **kwargs: send_calls.append(True),
-    )
-    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
-
-    response = _csrf_client(app_module).post(
-        "/assistent/kast/4/print/locatie",
-        data={
-            "_csrf_token": "test-csrf",
-            "position_ids": ["13"],
-        },
-    )
-
-    assert response.status_code == 200
-    assert send_calls == []
-    assert version.status == "PENDING_PRINT"
-    html = response.get_data(as_text=True)
-    assert "Geen enkele kaart is printbaar" in html
-
-
-def test_storage_location_location_print_mints_new_batch_id_when_retry_selection_changes(
-    app_module,
-    monkeypatch,
-):
-    kast, rows = _two_item_kast_fixture()
-    versions = {
-        13: SimpleNamespace(
-            status="PENDING_PRINT",
-            printed_at=None,
-            cancelled_at=None,
-            artikelnaam="Naaldencontainer",
-            artikel_foto_url="data:image/png;base64,QUJD",
-            bedrijfslogo_url="data:image/png;base64,REVG",
-            kamertype_naam="Behandeling",
-            kamertype_kleur="#123456",
-        ),
-    }
-    captured_batch_ids = []
-
-    class FakeQuery:
-        def all(self):
-            return rows
-
-    class FakeSession:
-        def commit(self):
-            return None
-
-        def rollback(self):
-            return None
-
-    monkeypatch.setattr(app_module, "check_db", lambda: True)
-    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
-    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
-    monkeypatch.setattr(
-        app_module,
-        "create_or_reuse_locatiekaart_version",
-        lambda *source_row: (versions[source_row[0].voorraad_positie_id], True),
-    )
-    monkeypatch.setattr(
-        app_module,
-        "send_location_cards_to_print_service",
-        lambda selected_versions, print_batch_id: captured_batch_ids.append(
-            print_batch_id
-        ) or (
-            True,
-            None,
-            {
-                "printBatchId": print_batch_id,
-                "jobId": "job-4",
-                "status": "ACCEPTED",
-                "cardCount": len(selected_versions),
-                "sheetCount": 1,
-            },
-        ),
-    )
-    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
-
-    response = _csrf_client(app_module).post(
-        "/assistent/kast/4/print/locatie",
-        data={
-            "_csrf_token": "test-csrf",
-            "position_ids": ["13"],
-            "printBatchId": "stale-batch",
-            "printBatchSelection": "13,14",
-        },
-    )
-
-    assert response.status_code == 302
-    assert captured_batch_ids == [captured_batch_ids[0]]
-    assert captured_batch_ids[0] != "stale-batch"
 
 
 class _CatalogQuery:

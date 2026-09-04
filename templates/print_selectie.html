@@ -28,10 +28,6 @@
 
 <form method="POST" id="printSelectionForm">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    {% if kaart_type == 'locatie' %}
-    <input type="hidden" name="printBatchId" value="{{ print_batch_id or '' }}">
-    <input type="hidden" name="printBatchSelection" value="{{ print_batch_selection or '' }}">
-    {% endif %}
 
     {% if valid_count %}
     <div class="d-flex justify-content-end mb-2">
