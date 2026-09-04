@@ -383,3 +383,54 @@ def test_location_card_contract_reports_printservice_http_errors(
     assert sent is False
     assert "Printservice fout" in error
     assert metadata is None
+
+
+def test_send_locatiekaart_batch_skips_cards_missing_room_type_name_or_color(
+    app_module,
+    monkeypatch,
+):
+    printable = _location_card_version(locatiekaart_versie_id=1, artikelnaam="Verband")
+    missing_name = _location_card_version(
+        locatiekaart_versie_id=2,
+        artikelnaam="Naaldencontainer",
+        kamertype_naam=None,
+    )
+    invalid_color = _location_card_version(
+        locatiekaart_versie_id=3,
+        artikelnaam="Pleisters",
+        kamertype_kleur="not-a-color",
+    )
+
+    sent_versions = []
+
+    def fake_send(versions, print_batch_id):
+        sent_versions.append(versions)
+        return True, None, {
+            "printBatchId": print_batch_id,
+            "jobId": "job-1",
+            "status": "ACCEPTED",
+            "cardCount": len(versions),
+            "sheetCount": 1,
+        }
+
+    monkeypatch.setattr(app_module, "send_location_cards_to_print_service", fake_send)
+    commits = []
+    monkeypatch.setattr(
+        app_module,
+        "db",
+        SimpleNamespace(session=SimpleNamespace(commit=lambda: commits.append(True))),
+    )
+
+    sent, error, metadata, skipped = app_module._send_locatiekaart_batch(
+        [printable, missing_name, invalid_color],
+        "batch-1",
+    )
+
+    assert sent is True
+    assert sent_versions == [[printable]]
+    assert ("Naaldencontainer", "Kamertype ontbreekt.") in skipped
+    assert (
+        "Pleisters",
+        "Kamertype-kleur ontbreekt of is ongeldig.",
+    ) in skipped
+    assert commits == [True]

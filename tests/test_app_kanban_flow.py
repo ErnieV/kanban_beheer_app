@@ -547,6 +547,8 @@ def test_location_print_selection_creates_only_selected_location_versions(
         artikelnaam="Naaldencontainer",
         artikel_foto_url="data:image/png;base64,QUJD",
         bedrijfslogo_url="data:image/png;base64,REVG",
+        kamertype_naam="Behandeling",
+        kamertype_kleur="#123456",
     )
 
     class FakeQuery:
@@ -816,6 +818,8 @@ def test_room_location_print_selection_processes_selected_standard_and_kanban(
             artikelnaam=row[1].eigen_naam,
             artikel_foto_url="data:image/png;base64,QUJD",
             bedrijfslogo_url="data:image/png;base64,REVG",
+            kamertype_naam="Behandeling",
+            kamertype_kleur="#123456",
         )
         for row in rows
     }
@@ -1047,6 +1051,8 @@ def test_storage_location_location_print_marks_versions_printed_after_acceptance
         artikelnaam="Naaldencontainer",
         artikel_foto_url="data:image/png;base64,QUJD",
         bedrijfslogo_url="data:image/png;base64,REVG",
+        kamertype_naam="Behandeling",
+        kamertype_kleur="#123456",
     )
     created = []
     sent = []
@@ -1121,6 +1127,8 @@ def test_storage_location_location_print_keeps_pending_on_service_failure(
         artikelnaam="Naaldencontainer",
         artikel_foto_url="data:image/png;base64,QUJD",
         bedrijfslogo_url="data:image/png;base64,REVG",
+        kamertype_naam="Behandeling",
+        kamertype_kleur="#123456",
     )
     commits = []
 
@@ -1183,6 +1191,8 @@ def test_storage_location_location_print_skips_articles_with_unresolvable_images
             artikelnaam="Naaldencontainer",
             artikel_foto_url="data:image/png;base64,QUJD",
             bedrijfslogo_url="data:image/png;base64,REVG",
+            kamertype_naam="Behandeling",
+            kamertype_kleur="#123456",
         ),
         14: SimpleNamespace(
             status="PENDING_PRINT",
@@ -1191,6 +1201,8 @@ def test_storage_location_location_print_skips_articles_with_unresolvable_images
             artikelnaam="Pulseoximeter",
             artikel_foto_url=None,
             bedrijfslogo_url="data:image/png;base64,REVG",
+            kamertype_naam="Behandeling",
+            kamertype_kleur="#123456",
         ),
     }
     sent = []
@@ -1268,6 +1280,8 @@ def test_storage_location_location_print_fails_when_all_selected_cards_are_unpri
         artikelnaam="Naaldencontainer",
         artikel_foto_url=None,
         bedrijfslogo_url="data:image/png;base64,REVG",
+        kamertype_naam="Behandeling",
+        kamertype_kleur="#123456",
     )
     send_calls = []
     commits = []
@@ -1327,6 +1341,8 @@ def test_storage_location_location_print_mints_new_batch_id_when_retry_selection
             artikelnaam="Naaldencontainer",
             artikel_foto_url="data:image/png;base64,QUJD",
             bedrijfslogo_url="data:image/png;base64,REVG",
+            kamertype_naam="Behandeling",
+            kamertype_kleur="#123456",
         ),
     }
     captured_batch_ids = []

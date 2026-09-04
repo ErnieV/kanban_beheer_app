@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import urllib.parse
 import socket
@@ -1910,13 +1911,17 @@ def _resolve_locatie_print_batch_id(selected_ids):
     return str(uuid.uuid4()), current_selection
 
 
+_HEX_COLOR_PATTERN = re.compile(r'^#[0-9A-Fa-f]{6}$')
+
+
 def _send_locatiekaart_batch(location_versions, print_batch_id):
     """Send a Locatiekaart batch to the A4 print service and mark accepted
     versions PRINTED.
 
-    Cards whose photo or logo can't be resolved are excluded per-article
-    instead of failing the whole batch. Returns (sent, error, metadata,
-    skipped), where skipped is a list of (artikelnaam, reason) tuples.
+    Cards whose photo, logo, or Kamertype can't be resolved are excluded
+    per-article instead of failing the whole batch. Returns (sent, error,
+    metadata, skipped), where skipped is a list of (artikelnaam, reason)
+    tuples.
     """
     printable_versions = []
     skipped = []
@@ -1935,6 +1940,13 @@ def _send_locatiekaart_batch(location_versions, print_batch_id):
         )
         if company_logo_error:
             skipped.append((label, company_logo_error))
+            continue
+        if not getattr(version, 'kamertype_naam', None):
+            skipped.append((label, 'Kamertype ontbreekt.'))
+            continue
+        room_type_color = getattr(version, 'kamertype_kleur', None)
+        if not room_type_color or not _HEX_COLOR_PATTERN.fullmatch(room_type_color):
+            skipped.append((label, 'Kamertype-kleur ontbreekt of is ongeldig.'))
             continue
         printable_versions.append(version)
 
