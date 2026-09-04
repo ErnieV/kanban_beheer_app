@@ -3010,6 +3010,34 @@ def api_artikel_gebruik(artikel_id):
         })
     return jsonify(usage)
 
+@app.route('/api/ruimte-kopieer-preview/<int:ruimte_id>')
+def api_ruimte_kopieer_preview(ruimte_id):
+    """Preview how many Opslaglocaties/Voorraadposities a 'kopieer
+    inrichting'-choice would copy from this Ruimte, before an admin commits
+    to it. See ticket #19: copying must never be a surprise.
+    """
+    if not check_db():
+        return jsonify({'opslaglocaties': 0, 'voorraadposities': 0})
+    bedrijf_id = get_huidig_bedrijf_id()
+    bron_ruimte = get_scoped_item(Ruimte, ruimte_id, bedrijf_id)
+    if not bron_ruimte:
+        return jsonify({'opslaglocaties': 0, 'voorraadposities': 0})
+
+    opslaglocaties = db.session.query(Kast).filter_by(
+        ruimte_id=ruimte_id,
+        bedrijf_id=bedrijf_id,
+    ).count()
+    voorraadposities = db.session.query(Voorraad_Positie).join(
+        Kast, Voorraad_Positie.kast_id == Kast.kast_id
+    ).filter(
+        Kast.ruimte_id == ruimte_id,
+        Voorraad_Positie.bedrijf_id == bedrijf_id,
+    ).count()
+    return jsonify({
+        'opslaglocaties': opslaglocaties,
+        'voorraadposities': voorraadposities,
+    })
+
 @app.route('/beheer/catalogus', methods=['GET', 'POST'])
 def beheer_catalogus():
     if not check_db(): return redirect(url_for('dashboard'))
@@ -3132,8 +3160,19 @@ def beheer_infra():
                 nieuwe_ruimte = Ruimte(bedrijf_id=bedrijf_id, vestiging_id=vest_id, naam=request.form.get('naam'), nummer=request.form.get('nummer'), ruimte_type_id=ruimte_type_id, type_ruimte='KAMER')
                 db.session.add(nieuwe_ruimte)
                 db.session.flush()
+                inrichting_keuze = request.form.get('inrichting_keuze')
                 kopieer_id = request.form.get('kopieer_van_ruimte_id', type=int)
-                if kopieer_id:
+                kopieer_bevestigd = request.form.get('kopieer_bevestigd') == '1'
+                # Ticket #19: copying an existing Ruimte's inrichting is the
+                # only place in the app where data could be created
+                # unnoticed. Two separate, explicit signals are required —
+                # the 'kopieer'-choice AND a confirmation flag the browser
+                # only sets after the user accepts the window.confirm()
+                # preview dialog. A present-but-unselected
+                # kopieer_van_ruimte_id, or a 'kopieer'-choice without the
+                # confirmation flag (e.g. a form POSTed directly, bypassing
+                # the confirm step), must never be enough on its own.
+                if inrichting_keuze == 'kopieer' and kopieer_id and kopieer_bevestigd:
                     bron_ruimte = get_scoped_item(Ruimte, kopieer_id, bedrijf_id)
                     if bron_ruimte:
                         bron_kasten = db.session.query(Kast).filter_by(ruimte_id=kopieer_id, bedrijf_id=bedrijf_id).all()

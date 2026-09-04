@@ -2703,3 +2703,391 @@ def test_update_ruimte_rejects_missing_kamertype(app_module, monkeypatch):
 
     assert response.status_code == 302
     assert ruimte.ruimte_type_id == 5
+
+
+def test_ruimte_kopieer_preview_returns_counts_for_bron_ruimte(app_module, monkeypatch):
+    """Ticket #19: preview the impact of copying a Ruimte's inrichting
+    before the admin commits to it, so the copy is never a surprise.
+    """
+    bron_ruimte = SimpleNamespace(ruimte_id=7, bedrijf_id=1, naam="Behandelkamer")
+
+    class FakeKastQuery:
+        def filter_by(self, **kwargs):
+            assert kwargs == {"ruimte_id": 7, "bedrijf_id": 1}
+            return self
+
+        def count(self):
+            return 3
+
+    class FakePositieQuery:
+        def join(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def count(self):
+            return 11
+
+    # Kast and Voorraad_Positie are both None (unreflected automap classes)
+    # in this test environment, so a bare `model is app_module.Kast` check
+    # would match either lookup. Patch them to distinct sentinel classes —
+    # the route builds join/filter expressions off class attributes like
+    # Voorraad_Positie.kast_id == Kast.kast_id, which the fakes below never
+    # evaluate for real, but do need to exist to avoid an AttributeError.
+    class KastSentinel:
+        kast_id = None
+        ruimte_id = None
+
+    class VoorraadPositieSentinel:
+        kast_id = None
+        bedrijf_id = None
+
+    class FakeSession:
+        def query(self, model):
+            if model is KastSentinel:
+                return FakeKastQuery()
+            if model is VoorraadPositieSentinel:
+                return FakePositieQuery()
+            raise AssertionError(f"unexpected query for {model}")
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "Kast", KastSentinel)
+    monkeypatch.setattr(app_module, "Voorraad_Positie", VoorraadPositieSentinel)
+    monkeypatch.setattr(
+        app_module,
+        "get_scoped_item",
+        lambda model, item_id, bedrijf_id: (
+            bron_ruimte if model is app_module.Ruimte else None
+        ),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).get("/api/ruimte-kopieer-preview/7")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"opslaglocaties": 3, "voorraadposities": 11}
+
+
+def test_ruimte_kopieer_preview_returns_zero_for_unknown_ruimte(app_module, monkeypatch):
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: None)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=SimpleNamespace()))
+
+    response = _csrf_client(app_module).get("/api/ruimte-kopieer-preview/999")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"opslaglocaties": 0, "voorraadposities": 0}
+
+
+def test_nieuwe_ruimte_does_not_copy_without_explicit_keuze(app_module, monkeypatch):
+    """Ticket #19: an empty/missing 'inrichting_keuze' must never trigger a
+    copy, even if a kopieer_van_ruimte_id happens to be present in the
+    POST body (defence in depth beyond the client-side confirmation).
+
+    Kast/Voorraad_Positie are deliberately left as the module's real (None)
+    automap placeholders: if the fix regresses and a copy is attempted
+    anyway, instantiating a None model raises TypeError and fails the test.
+    """
+    vestiging = SimpleNamespace(vestiging_id=1, bedrijf_id=1, naam="Hoofdvestiging")
+    ruimte_type = SimpleNamespace(ruimte_type_id=5, bedrijf_id=1, naam="Behandelkamer")
+    added = []
+
+    class FakeRuimte:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.ruimte_id = 501
+
+    def get_scoped_item(model, item_id, bedrijf_id):
+        if model is app_module.Vestiging:
+            return vestiging
+        if model is app_module.Ruimte_Type:
+            return ruimte_type
+        if model is FakeRuimte:
+            raise AssertionError(
+                "get_scoped_item(Ruimte, ...) must not run without an "
+                "explicit inrichting_keuze='kopieer'"
+            )
+        return None
+
+    def query_that_must_not_run(model):
+        raise AssertionError(
+            "db.session.query must not look up a bron Ruimte's inrichting "
+            "without an explicit inrichting_keuze='kopieer'"
+        )
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "Ruimte", FakeRuimte)
+    monkeypatch.setattr(app_module, "get_scoped_item", get_scoped_item)
+    monkeypatch.setattr(
+        app_module,
+        "db",
+        SimpleNamespace(
+            session=SimpleNamespace(
+                add=lambda item: added.append(item),
+                flush=lambda: None,
+                commit=lambda: None,
+                query=query_that_must_not_run,
+            )
+        ),
+    )
+
+    response = _csrf_client(app_module).post(
+        "/beheer/infra",
+        data={
+            "_csrf_token": "test-csrf",
+            "actie": "nieuwe_ruimte",
+            "vestiging_id": "1",
+            "naam": "Nieuwe Kamer",
+            "ruimte_type_id": "5",
+            # inrichting_keuze intentionally omitted, even though a
+            # confirmation flag and a source id are both present — the
+            # explicit choice is its own, separate requirement.
+            "kopieer_van_ruimte_id": "3",
+            "kopieer_bevestigd": "1",
+        },
+    )
+
+    assert response.status_code == 302
+    assert len(added) == 1  # only the new Ruimte itself, no Kast/Voorraad_Positie copied
+
+
+def test_nieuwe_ruimte_does_not_copy_without_bevestiging(app_module, monkeypatch):
+    """Ticket #19: 'expliciete bevestiging door de beheerder' is a separate
+    acceptance criterion from the 'kopieer'-choice itself. A form posted
+    with inrichting_keuze='kopieer' but without the confirmation flag the
+    browser only sets after window.confirm() returns true — e.g. a direct
+    POST that bypasses the browser dialog entirely — must not copy either.
+    """
+    vestiging = SimpleNamespace(vestiging_id=1, bedrijf_id=1, naam="Hoofdvestiging")
+    ruimte_type = SimpleNamespace(ruimte_type_id=5, bedrijf_id=1, naam="Behandelkamer")
+    added = []
+
+    class FakeRuimte:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.ruimte_id = 501
+
+    def get_scoped_item(model, item_id, bedrijf_id):
+        if model is app_module.Vestiging:
+            return vestiging
+        if model is app_module.Ruimte_Type:
+            return ruimte_type
+        if model is FakeRuimte:
+            raise AssertionError(
+                "get_scoped_item(Ruimte, ...) must not run without an "
+                "explicit kopieer_bevestigd='1'"
+            )
+        return None
+
+    def query_that_must_not_run(model):
+        raise AssertionError(
+            "db.session.query must not look up a bron Ruimte's inrichting "
+            "without an explicit kopieer_bevestigd='1'"
+        )
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "Ruimte", FakeRuimte)
+    monkeypatch.setattr(app_module, "get_scoped_item", get_scoped_item)
+    monkeypatch.setattr(
+        app_module,
+        "db",
+        SimpleNamespace(
+            session=SimpleNamespace(
+                add=lambda item: added.append(item),
+                flush=lambda: None,
+                commit=lambda: None,
+                query=query_that_must_not_run,
+            )
+        ),
+    )
+
+    response = _csrf_client(app_module).post(
+        "/beheer/infra",
+        data={
+            "_csrf_token": "test-csrf",
+            "actie": "nieuwe_ruimte",
+            "vestiging_id": "1",
+            "naam": "Nieuwe Kamer",
+            "ruimte_type_id": "5",
+            "inrichting_keuze": "kopieer",
+            "kopieer_van_ruimte_id": "3",
+            # kopieer_bevestigd intentionally omitted — as if the form was
+            # posted without the confirm() dialog ever having run.
+        },
+    )
+
+    assert response.status_code == 302
+    assert len(added) == 1  # only the new Ruimte itself, no Kast/Voorraad_Positie copied
+
+
+def test_nieuwe_ruimte_copies_inrichting_when_explicitly_chosen(app_module, monkeypatch):
+    vestiging = SimpleNamespace(vestiging_id=1, bedrijf_id=1, naam="Hoofdvestiging")
+    ruimte_type = SimpleNamespace(ruimte_type_id=5, bedrijf_id=1, naam="Behandelkamer")
+    bron_ruimte = SimpleNamespace(ruimte_id=3, bedrijf_id=1, naam="Bronkamer")
+    bron_kast = SimpleNamespace(kast_id=40, ruimte_id=3, bedrijf_id=1, naam="Kast A", type_opslag="GRIJP")
+    bron_positie = SimpleNamespace(
+        voorraad_positie_id=90,
+        kast_id=40,
+        bedrijf_id=1,
+        lokaal_artikel_id=8,
+        materiaaltype="KANBAN",
+        locatie_foto_url=None,
+    )
+    added = []
+
+    class FakeRuimte:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.ruimte_id = 501
+
+    class FakeKast:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.kast_id = 601
+
+    class FakeVoorraadPositie:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.voorraad_positie_id = 701
+
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter_by(self, **kwargs):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class FakeSession:
+        def query(self, model):
+            if model is FakeKast:
+                return FakeQuery([bron_kast])
+            if model is FakeVoorraadPositie:
+                return FakeQuery([bron_positie])
+            raise AssertionError(f"unexpected query for {model}")
+
+        def add(self, item):
+            added.append(item)
+
+        def flush(self):
+            return None
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "Ruimte", FakeRuimte)
+    monkeypatch.setattr(app_module, "Kast", FakeKast)
+    monkeypatch.setattr(app_module, "Voorraad_Positie", FakeVoorraadPositie)
+    monkeypatch.setattr(
+        app_module,
+        "get_scoped_item",
+        lambda model, item_id, bedrijf_id: (
+            vestiging if model is app_module.Vestiging
+            else ruimte_type if model is app_module.Ruimte_Type
+            else bron_ruimte if model is FakeRuimte
+            else SimpleNamespace(eigen_naam="Artikel") if model is app_module.Lokaal_Artikel
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "position_kanban_override_values",
+        lambda position, article: (None, None),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).post(
+        "/beheer/infra",
+        data={
+            "_csrf_token": "test-csrf",
+            "actie": "nieuwe_ruimte",
+            "vestiging_id": "1",
+            "naam": "Nieuwe Kamer",
+            "ruimte_type_id": "5",
+            "inrichting_keuze": "kopieer",
+            "kopieer_van_ruimte_id": "3",
+            "kopieer_bevestigd": "1",
+        },
+    )
+
+    assert response.status_code == 302
+    # 1 nieuwe Ruimte + 1 gekopieerde Kast + 1 gekopieerde Voorraad_Positie
+    assert len(added) == 3
+
+
+def test_beheer_infra_renders_explicit_ruimte_inrichting_choice(app_module, monkeypatch):
+    """Ticket #19: the naamloos dropdown is gone — a rendered page must
+    offer an explicit, labelled choice instead of an implicit copy trigger.
+    """
+    vestiging = SimpleNamespace(vestiging_id=1, bedrijf_id=1, naam="Hoofdvestiging", adres=None)
+    ruimte_type = SimpleNamespace(ruimte_type_id=5, bedrijf_id=1, naam="Behandelkamer", kleur_hex="#123456")
+    andere_ruimte = SimpleNamespace(ruimte_id=9, nummer="1", naam="Spreekkamer")
+
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter_by(self, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def join(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class FakeSession:
+        def query(self, *models):
+            model = models[0]
+            if model is app_module.Vestiging:
+                return FakeQuery([vestiging])
+            if model is app_module.Ruimte_Type:
+                return FakeQuery([ruimte_type])
+            if model is app_module.Ruimte:
+                return FakeQuery([andere_ruimte])
+            return FakeQuery([])
+
+    class RuimteSentinel:  # Ruimte.nummer/.naam are read for order_by()
+        nummer = None
+        naam = None
+
+    class VestigingSentinel:  # Vestiging.bedrijf_id is read for the join filter
+        bedrijf_id = None
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "Ruimte", RuimteSentinel)
+    monkeypatch.setattr(app_module, "Vestiging", VestigingSentinel)
+    monkeypatch.setattr(
+        app_module,
+        "get_scoped_item",
+        lambda model, item_id, bedrijf_id: (
+            vestiging if model is app_module.Vestiging else None
+        ),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = _csrf_client(app_module).get("/beheer/infra?vestiging_id=1")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Nieuwe lege Ruimte" in html
+    assert "Inrichting kopiëren van" in html
+    assert 'name="inrichting_keuze"' in html
+    assert "- Lege -" not in html  # het oude, naamloze dropdown-label mag niet terugkomen
+    assert 'name="kopieer_bevestigd"' in html

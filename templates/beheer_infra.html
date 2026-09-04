@@ -117,7 +117,8 @@
             </div>
             <div class="card-body bg-light-subtle">
                 <!-- Nieuwe Ruimte -->
-                <form action="{{ url_for('beheer_infra') }}" method="POST" class="mb-4">
+                <form action="{{ url_for('beheer_infra') }}" method="POST" class="mb-4"
+                      id="nieuweRuimteForm" onsubmit="return confirmRuimteKopieer(event)">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="actie" value="nieuwe_ruimte">
                     <input type="hidden" name="vestiging_id" value="{{ active_vestiging_id }}">
@@ -127,26 +128,41 @@
                         <input type="text" name="naam" class="form-control" placeholder="Naam Ruimte" required>
                     </div>
                     
-                    <div class="row g-1 mb-2">
-                        <div class="col-6">
-                            <select name="ruimte_type_id" class="form-select form-select-sm" required>
-                                <option value="" disabled selected>Type...</option>
-                                {% for rt in ruimte_types %}
-                                    <option value="{{ rt.ruimte_type_id }}">{{ rt.naam }}</option>
-                                {% endfor %}
-                            </select>
+                    <div class="mb-2">
+                        <select name="ruimte_type_id" class="form-select form-select-sm" required>
+                            <option value="" disabled selected>Type...</option>
+                            {% for rt in ruimte_types %}
+                                <option value="{{ rt.ruimte_type_id }}">{{ rt.naam }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-2 small">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="inrichting_keuze"
+                                   id="ruimteInrichtingLeeg" value="leeg" checked>
+                            <label class="form-check-label" for="ruimteInrichtingLeeg">Nieuwe lege Ruimte</label>
                         </div>
-                        <div class="col-6">
-                             <select name="kopieer_van_ruimte_id" class="form-select form-select-sm border-info bg-light">
-                                <option value="">- Lege -</option>
-                                {% for r in alle_ruimtes %}
-                                    <option value="{{ r.ruimte_id }}">
-                                        {% if r.nummer %}{{ r.nummer }} - {% endif %}{{ r.naam }}
-                                    </option>
-                                {% endfor %}
-                            </select>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="inrichting_keuze"
+                                   id="ruimteInrichtingKopieer" value="kopieer">
+                            <label class="form-check-label" for="ruimteInrichtingKopieer">Inrichting kopiëren van…</label>
                         </div>
                     </div>
+
+                    <div id="ruimteKopieerBlok" class="mb-2 d-none">
+                        <select name="kopieer_van_ruimte_id" id="ruimteKopieerSelect"
+                                class="form-select form-select-sm border-info bg-light">
+                            <option value="" selected>Kies een Ruimte...</option>
+                            {% for r in alle_ruimtes %}
+                                <option value="{{ r.ruimte_id }}">
+                                    {% if r.nummer %}{{ r.nummer }} - {% endif %}{{ r.naam }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div id="ruimteKopieerPreview" class="form-text small d-none"></div>
+                    </div>
+                    <input type="hidden" name="kopieer_bevestigd" id="ruimteKopieerBevestigd" value="0">
 
                     <button type="submit" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-lg"></i> Toevoegen</button>
                 </form>
@@ -296,5 +312,84 @@
         document.getElementById('editKastNaam').value = button.getAttribute('data-naam')
         document.getElementById('editKastType').value = button.getAttribute('data-type')
     })
+
+    // Ruimte kopiëren: expliciete keuze, preview en bevestiging (ticket #19).
+    // Copying is the only place in the app where data can be created
+    // unnoticed, so this must never be a single unlabeled dropdown again.
+    var ruimteKopieerPreviewState = { loaded: false, opslaglocaties: 0, voorraadposities: 0 }
+
+    function ruimteInrichtingKeuzeGewijzigd() {
+        var kopieer = document.getElementById('ruimteInrichtingKopieer').checked
+        var blok = document.getElementById('ruimteKopieerBlok')
+        blok.classList.toggle('d-none', !kopieer)
+        document.getElementById('ruimteKopieerBevestigd').value = '0'
+        if (!kopieer) {
+            ruimteKopieerPreviewState.loaded = false
+            document.getElementById('ruimteKopieerPreview').classList.add('d-none')
+        }
+    }
+
+    function laadRuimteKopieerPreview() {
+        var select = document.getElementById('ruimteKopieerSelect')
+        var preview = document.getElementById('ruimteKopieerPreview')
+        var id = select.value
+        ruimteKopieerPreviewState.loaded = false
+        // Een nieuwe bronkeuze maakt een eerdere bevestiging ongeldig — de
+        // aantallen die net bevestigd waren, gelden niet meer voor deze bron.
+        document.getElementById('ruimteKopieerBevestigd').value = '0'
+        if (!id) {
+            preview.classList.add('d-none')
+            return
+        }
+        preview.textContent = 'Wordt geladen...'
+        preview.classList.remove('d-none')
+        fetch('/api/ruimte-kopieer-preview/' + id)
+            .then(function (response) { return response.json() })
+            .then(function (data) {
+                ruimteKopieerPreviewState.loaded = true
+                ruimteKopieerPreviewState.opslaglocaties = data.opslaglocaties || 0
+                ruimteKopieerPreviewState.voorraadposities = data.voorraadposities || 0
+                preview.textContent = 'Dit kopieert ' + ruimteKopieerPreviewState.opslaglocaties +
+                    ' opslaglocatie(s) en ' + ruimteKopieerPreviewState.voorraadposities + ' voorraadpositie(s).'
+            })
+            .catch(function () {
+                preview.textContent = 'Het aantal kon niet worden geladen.'
+                ruimteKopieerPreviewState.loaded = false
+            })
+    }
+
+    function confirmRuimteKopieer(event) {
+        var kopieer = document.getElementById('ruimteInrichtingKopieer').checked
+        var bevestigdVeld = document.getElementById('ruimteKopieerBevestigd')
+        if (!kopieer) {
+            bevestigdVeld.value = '0'
+            return true
+        }
+        var select = document.getElementById('ruimteKopieerSelect')
+        if (!select.value) {
+            alert('Kies eerst een Ruimte om de inrichting van te kopiëren.')
+            return false
+        }
+        if (!ruimteKopieerPreviewState.loaded) {
+            alert('Wacht tot het aantal opslaglocaties/voorraadposities geladen is.')
+            return false
+        }
+        var akkoord = window.confirm(
+            'Dit kopieert ' + ruimteKopieerPreviewState.opslaglocaties + ' opslaglocatie(s) en ' +
+            ruimteKopieerPreviewState.voorraadposities + ' voorraadpositie(s) naar de nieuwe Ruimte. Doorgaan?'
+        )
+        // De server accepteert een kopieeractie alleen met dit expliciete
+        // bevestigingsveld — een POST die window.confirm() overslaat (of
+        // rechtstreeks buiten de browser om gaat) kan nooit kopiëren.
+        bevestigdVeld.value = akkoord ? '1' : '0'
+        return akkoord
+    }
+
+    var ruimteInrichtingLeeg = document.getElementById('ruimteInrichtingLeeg')
+    if (ruimteInrichtingLeeg) {
+        ruimteInrichtingLeeg.addEventListener('change', ruimteInrichtingKeuzeGewijzigd)
+        document.getElementById('ruimteInrichtingKopieer').addEventListener('change', ruimteInrichtingKeuzeGewijzigd)
+        document.getElementById('ruimteKopieerSelect').addEventListener('change', laadRuimteKopieerPreview)
+    }
 </script>
 {% endblock %}
