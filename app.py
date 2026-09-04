@@ -1684,7 +1684,7 @@ def assistent_kamers():
         ruimtes_query = db.session.query(Ruimte, Vestiging)\
             .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
             .filter(Vestiging.bedrijf_id == bedrijf_id)\
-            .order_by(Vestiging.naam, Ruimte.nummer, Ruimte.naam).all() 
+            .order_by(Vestiging.naam, Ruimte.nummer, Ruimte.naam).all()
         ruimtes_data = []
         for ruimte, vestiging in ruimtes_query:
             count = db.session.query(Kast).filter_by(ruimte_id=ruimte.ruimte_id, bedrijf_id=bedrijf_id).count()
@@ -1692,29 +1692,16 @@ def assistent_kamers():
         return render_template('assistent_kamer_selectie.html', ruimtes=ruimtes_data)
     except Exception as e:
         print(f"Error: {e}")
+        flash('Mijn Ruimtes kon niet worden geladen.', 'danger')
         return redirect(url_for('dashboard'))
 
 
 @app.route('/assistent/kasten')
 def kast_selectie():
-    if not check_db():
-        return redirect(url_for('dashboard'))
-    bedrijf_id = get_huidig_bedrijf_id()
-    kasten = db.session.query(Kast, Ruimte, Vestiging).join(
-        Ruimte,
-        Kast.ruimte_id == Ruimte.ruimte_id,
-    ).join(
-        Vestiging,
-        Ruimte.vestiging_id == Vestiging.vestiging_id,
-    ).filter(
-        Kast.bedrijf_id == bedrijf_id,
-    ).order_by(
-        Vestiging.naam,
-        Ruimte.nummer,
-        Ruimte.naam,
-        Kast.naam,
-    ).all()
-    return render_template('kast_selectie.html', kasten=kasten)
+    # Ticket #14: the standalone Opslaglocatie overview is gone — Mijn
+    # Ruimtes is the sole navigation tree now. This route survives only so
+    # an old bookmark/link still lands somewhere sensible.
+    return redirect(url_for('assistent_kamers'))
 
 
 def _kast_inventory_query(kast_id, bedrijf_id):
@@ -1969,35 +1956,18 @@ def _send_locatiekaart_batch(location_versions, print_batch_id):
 
 @app.route('/assistent/kast/<int:kast_id>')
 def assistent_kast_inhoud(kast_id):
+    # Ticket #14: the standalone Opslaglocatie detail page is gone — send
+    # an old bookmark to the Ruimte instead, with this Opslaglocatie
+    # already expanded, rather than a page that no longer exists.
     if not check_db():
         return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
     kast = get_scoped_item(Kast, kast_id, bedrijf_id)
     if not kast:
-        flash('Kast niet gevonden of geen toegang.', 'warning')
-        return redirect(url_for('kast_selectie'))
-
-    inhoud = [
-        row[:3]
-        for row in _kast_inventory_query(kast_id, bedrijf_id).order_by(
-            Lokaal_Artikel.eigen_naam,
-        ).all()
-    ]
-    artikelen = db.session.query(Lokaal_Artikel).filter_by(
-        bedrijf_id=bedrijf_id,
-    ).order_by(
-        Lokaal_Artikel.eigen_naam,
-    ).all()
-    return render_template(
-        'kast_inhoud.html',
-        kast=kast,
-        inhoud=inhoud,
-        artikelen=artikelen,
-        kanban_count=sum(
-            _position_material_type(row[0]) is Materiaaltype.KANBAN
-            for row in inhoud
-        ),
-        locatiekaart_count=len(inhoud),
+        flash('Opslaglocatie niet gevonden of geen toegang.', 'warning')
+        return redirect(url_for('assistent_kamers'))
+    return redirect(
+        url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id, open_kast=kast_id)
     )
 
 
@@ -2005,11 +1975,16 @@ def assistent_kast_inhoud(kast_id):
 def assistent_kamer_view(ruimte_id):
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
-    
+
     ruimte = db.session.query(Ruimte).filter(Ruimte.ruimte_id == ruimte_id, Ruimte.bedrijf_id == bedrijf_id).first()
     if not ruimte:
         flash('Ruimte niet gevonden of geen toegang.', 'warning')
         return redirect(url_for('assistent_kamers'))
+
+    vestiging = db.session.query(Vestiging).filter(
+        Vestiging.vestiging_id == ruimte.vestiging_id,
+        Vestiging.bedrijf_id == bedrijf_id,
+    ).first()
 
     if ruimte.ruimte_type_id:
         rt = db.session.query(Ruimte_Type).filter(
@@ -2020,21 +1995,35 @@ def assistent_kamer_view(ruimte_id):
     else:
         ruimte.kleur_hex = None
 
-    kasten_in_kamer = db.session.query(Kast).filter_by(ruimte_id=ruimte_id, bedrijf_id=bedrijf_id).all()
+    kasten_in_kamer = db.session.query(Kast).filter_by(
+        ruimte_id=ruimte_id, bedrijf_id=bedrijf_id,
+    ).order_by(Kast.naam).all()
     kasten_data = {}
     for kast in kasten_in_kamer:
         inhoud = db.session.query(Voorraad_Positie, Lokaal_Artikel, Global_Catalogus)\
             .join(Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id)\
             .outerjoin(Global_Catalogus, Lokaal_Artikel.global_id == Global_Catalogus.global_id)\
             .filter(Voorraad_Positie.kast_id == kast.kast_id, Voorraad_Positie.bedrijf_id == bedrijf_id)\
+            .order_by(Lokaal_Artikel.eigen_naam)\
             .all()
         kasten_data[kast] = inhoud
     alle_artikelen = db.session.query(Lokaal_Artikel).filter_by(bedrijf_id=bedrijf_id).order_by(Lokaal_Artikel.eigen_naam).all()
+
+    # Ticket #14: deep-links from the old Opslaglocatie detail page (and a
+    # bare visit) both need a deterministic accordion item open — the
+    # requested one if it's actually in this Ruimte, else the first.
+    open_kast_id = request.args.get('open_kast', type=int)
+    kast_ids_in_kamer = {kast.kast_id for kast in kasten_in_kamer}
+    if open_kast_id not in kast_ids_in_kamer:
+        open_kast_id = kasten_in_kamer[0].kast_id if kasten_in_kamer else None
+
     return render_template(
         'assistent_kamer_view.html',
         ruimte=ruimte,
+        vestiging=vestiging,
         kasten_data=kasten_data,
         alle_artikelen=alle_artikelen,
+        open_kast_id=open_kast_id,
         kanban_count=sum(
             _position_material_type(row[0]) is Materiaaltype.KANBAN
             for inhoud in kasten_data.values()
@@ -2118,7 +2107,7 @@ def kast_print_selectie(kast_id, kaart_type):
         return redirect(url_for('dashboard'))
     if kaart_type not in {'kanban', 'locatie'}:
         flash('Onbekend kaarttype.', 'warning')
-        return redirect(url_for('kast_selectie'))
+        return redirect(url_for('assistent_kamers'))
     kaart_type_label = (
         'Kanban-kaartjes'
         if kaart_type == 'kanban'
@@ -2129,7 +2118,7 @@ def kast_print_selectie(kast_id, kaart_type):
     kast = get_scoped_item(Kast, kast_id, bedrijf_id)
     if not kast:
         flash('Opslaglocatie niet gevonden of geen toegang.', 'warning')
-        return redirect(url_for('kast_selectie'))
+        return redirect(url_for('assistent_kamers'))
 
     rows = _kast_inventory_query(kast_id, bedrijf_id).all()
     selection_items = _kast_print_selection_items(rows, kaart_type)
@@ -2185,7 +2174,7 @@ def kast_print_selectie(kast_id, kaart_type):
                     f'{"s" if len(selected_items) != 1 else ""} aangevraagd.',
                     'success',
                 )
-                return redirect(url_for('assistent_kast_inhoud', kast_id=kast_id))
+                return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
             location_versions = []
             for item in selected_items:
@@ -2227,7 +2216,7 @@ def kast_print_selectie(kast_id, kaart_type):
                 f'{metadata["sheetCount"]} vel(len), job {metadata["jobId"]}.',
                 'success',
             )
-            return redirect(url_for('assistent_kast_inhoud', kast_id=kast_id))
+            return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
         except Exception as exc:
             db.session.rollback()
             flash(f'Fout bij printaanvraag: {exc}', 'danger')
@@ -2424,14 +2413,8 @@ def kanban_aanvragen_enkel(voorraad_positie_id):
         db.session.rollback()
         print(e)
         flash(f"Fout bij aanvragen: {e}", "danger")
-        
-    return redirect(request.referrer)
 
-@app.route('/assistent/kanban/aanvragen/kast/<int:kast_id>', methods=['POST'])
-def kanban_aanvragen_kast(kast_id):
-    return redirect(
-        url_for('kast_print_selectie', kast_id=kast_id, kaart_type='kanban')
-    )
+    return redirect(request.referrer or url_for('assistent_kamers'))
 
 @app.route('/assistent/print-queue')
 def assistent_print_queue():

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="mb-4">
-    <a href="{{ url_for('assistent_kast_inhoud', kast_id=kast.kast_id) }}" class="text-decoration-none text-muted fw-medium">
+    <a href="{{ url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id, open_kast=kast.kast_id) }}" class="text-decoration-none text-muted fw-medium">
         <i class="bi bi-arrow-left me-1"></i> Terug naar {{ kast.naam }}
     </a>
 </div>
@@ -76,7 +76,7 @@
     </div>
 
     <div class="d-flex justify-content-end gap-2">
-        <a href="{{ url_for('assistent_kast_inhoud', kast_id=kast.kast_id) }}" class="btn btn-outline-secondary">Annuleren</a>
+        <a href="{{ url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id, open_kast=kast.kast_id) }}" class="btn btn-outline-secondary">Annuleren</a>
         <button type="submit" class="btn btn-primary" id="printSelectionButton" {% if not valid_count or not selected_ids %}disabled{% endif %}>
             <i class="bi bi-printer me-1"></i> Printen
         </button>

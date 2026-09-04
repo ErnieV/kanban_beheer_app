@@ -288,7 +288,7 @@ def test_storage_location_kanban_print_selection_filters_and_validates_assets(
     app_module,
     monkeypatch,
 ):
-    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A", type_opslag="GRIJP")
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Kast A", type_opslag="GRIJP")
     room = SimpleNamespace(ruimte_id=9, naam="Behandelkamer", nummer="1")
     room_type = SimpleNamespace(ruimte_type_id=8, naam="Behandeling", kleur_hex="#123456")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
@@ -431,7 +431,7 @@ def test_storage_location_print_only_processes_selected_valid_items(
     app_module,
     monkeypatch,
 ):
-    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Kast A")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
     branch = SimpleNamespace(naam="Vestiging")
     room = SimpleNamespace(naam="Behandelkamer", nummer=None)
@@ -517,7 +517,7 @@ def test_location_print_selection_creates_only_selected_location_versions(
     app_module,
     monkeypatch,
 ):
-    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Kast A")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
     branch = SimpleNamespace(naam="Vestiging")
     room = SimpleNamespace(naam="Behandelkamer", nummer=None)
@@ -606,7 +606,7 @@ def test_empty_storage_location_print_selection_has_no_side_effect(
     app_module,
     monkeypatch,
 ):
-    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Lege kast")
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Lege kast")
     commits = []
 
     class FakeQuery:
@@ -641,6 +641,7 @@ def _room_print_rows():
     room = SimpleNamespace(
         ruimte_id=9,
         ruimte_type_id=8,
+        vestiging_id=6,
         naam="Behandelkamer",
         nummer="1",
     )
@@ -928,6 +929,7 @@ def test_room_page_exposes_independent_print_actions_with_counts(
 ):
     room, rows = _room_print_rows()
     room_type = rows[0][5]
+    vestiging = SimpleNamespace(vestiging_id=6, naam="Vestiging Noord")
     class HashableNamespace(SimpleNamespace):
         __hash__ = object.__hash__
 
@@ -971,6 +973,8 @@ def test_room_page_exposes_independent_print_actions_with_counts(
                 return Query(result=room)
             if len(models) == 1 and models[0] is app_module.Ruimte_Type:
                 return Query(result=room_type)
+            if len(models) == 1 and models[0] is app_module.Vestiging:
+                return Query(result=vestiging)
             if len(models) == 1 and models[0] is app_module.Kast:
                 return Query(results=[kast])
             if len(models) == 1 and models[0] is app_module.Lokaal_Artikel:
@@ -981,9 +985,10 @@ def test_room_page_exposes_independent_print_actions_with_counts(
         "Voorraad_Positie": ["lokaal_artikel_id", "kast_id", "bedrijf_id"],
         "Lokaal_Artikel": ["lokaal_artikel_id", "global_id", "eigen_naam"],
         "Global_Catalogus": ["global_id"],
-        "Kast": ["kast_id", "ruimte_id", "bedrijf_id"],
+        "Kast": ["kast_id", "ruimte_id", "bedrijf_id", "naam"],
         "Ruimte": ["ruimte_id", "ruimte_type_id", "bedrijf_id"],
         "Ruimte_Type": ["ruimte_type_id", "bedrijf_id"],
+        "Vestiging": ["vestiging_id", "bedrijf_id"],
     }.items():
         monkeypatch.setattr(
             app_module,
@@ -1005,7 +1010,7 @@ def test_room_page_exposes_independent_print_actions_with_counts(
 
 
 def _two_item_kast_fixture():
-    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A")
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Kast A")
     room = SimpleNamespace(naam="Behandelkamer", nummer=None)
     room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
     company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
@@ -1690,26 +1695,82 @@ def test_article_usage_api_returns_effective_values_and_inheritance_state(
     assert all("max" not in item for item in data)
 
 
-def test_storage_location_page_renders_effective_kanban_values(
+def test_old_storage_location_url_redirects_to_room_with_it_expanded(
     app_module, monkeypatch
 ):
-    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, naam="Kast A", type_opslag="GRIJP")
-    position = SimpleNamespace(
-        voorraad_positie_id=12,
-        materiaaltype="KANBAN",
-        kanban_min_override=None,
-        kanban_refill_quantity_override=None,
-    )
-    article = SimpleNamespace(
-        lokaal_artikel_id=7,
-        eigen_naam="Verband",
-        verpakkingseenheid_tekst="doos",
-        foto_url=None,
-        kanban_min=3,
-        kanban_refill_quantity=4,
-    )
+    """Ticket #14: the standalone Opslaglocatie detail page is gone. An old
+    /assistent/kast/<id> link (bookmark, printed QR, etc.) must land on the
+    Ruimte with that Opslaglocatie already expanded, not on a dead page —
+    and never render kast_inhoud.html content directly.
+    """
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Kast A")
 
-    class ContentQuery:
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+
+    response = app_module.app.test_client().get("/assistent/kast/4")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/assistent/kamer/9?open_kast=4"
+
+
+def test_old_storage_location_url_falls_back_to_mijn_ruimtes_when_not_found(
+    app_module, monkeypatch
+):
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: None)
+
+    response = app_module.app.test_client().get("/assistent/kast/999")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/assistent/kamers"
+
+
+def test_old_storage_location_overview_url_redirects_to_mijn_ruimtes(
+    app_module, monkeypatch
+):
+    response = app_module.app.test_client().get("/assistent/kasten")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/assistent/kamers"
+
+
+def test_print_selectie_unknown_kast_redirects_to_mijn_ruimtes(app_module, monkeypatch):
+    """Ticket #14: an error inside the print-selection flow must land on
+    Mijn Ruimtes now, not on the deleted Opslaglocatie overview.
+    """
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: None)
+
+    response = app_module.app.test_client().get("/assistent/kast/4/print/kanban")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/assistent/kamers"
+
+
+def test_print_selectie_unknown_kaart_type_redirects_to_mijn_ruimtes(app_module, monkeypatch):
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+
+    response = app_module.app.test_client().get("/assistent/kast/4/print/onbekend")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/assistent/kamers"
+
+
+def test_kanban_aanvragen_enkel_falls_back_to_mijn_ruimtes_without_referer(
+    app_module, monkeypatch
+):
+    """Ticket #14: without a Referer header (privacy settings, a direct
+    POST), the final redirect must not become redirect(None).
+    """
+    position = SimpleNamespace(voorraad_positie_id=12, materiaaltype="KANBAN")
+    row = (position, "artikel", None, "kast", "ruimte", "ruimte_type", "bedrijf")
+
+    class Query:
         def join(self, *args, **kwargs):
             return self
 
@@ -1719,66 +1780,138 @@ def test_storage_location_page_renders_effective_kanban_values(
         def filter(self, *args, **kwargs):
             return self
 
-        def order_by(self, *args, **kwargs):
-            return self
-
-        def all(self):
-            return [(position, article, None)]
-
-    class ArticleQuery(ContentQuery):
-        def filter_by(self, **kwargs):
-            return self
-
-        def all(self):
-            return [article]
-
-    class FakeSession:
-        def query(self, *models):
-            return ContentQuery() if len(models) == 3 else ArticleQuery()
+        def first(self):
+            return row
 
     monkeypatch.setattr(app_module, "check_db", lambda: True)
     monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(
+        session=SimpleNamespace(
+            query=lambda *models: Query(),
+            add=lambda item: None,
+            commit=lambda: None,
+            rollback=lambda: None,
+        )
+    ))
+    monkeypatch.setattr(app_module, "create_queue_item", lambda *row: "queue-item")
+
+    response = _csrf_client(app_module).post(
+        "/assistent/kanban/aanvragen/enkel/12",
+        data={"_csrf_token": "test-csrf"},
+        headers={},  # geen Referer
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/assistent/kamers"
+
+
+def test_assistent_kamers_shows_flash_when_loading_fails(app_module, monkeypatch):
+    """Ticket #14: a failure while loading Mijn Ruimtes must be visible,
+    not a silent fallback to an empty dashboard.
+    """
+    def raise_query(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "db",
+        SimpleNamespace(session=SimpleNamespace(query=raise_query)),
+    )
+
+    response = app_module.app.test_client().get(
+        "/assistent/kamers", follow_redirects=True
+    )
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Mijn Ruimtes kon niet worden geladen." in html
+
+
+def test_room_page_opens_requested_kast_via_open_kast_param(app_module, monkeypatch):
+    """Ticket #14: ?open_kast=<id> must actually control which
+    Opslaglocatie is expanded, not just the first one.
+    """
+    room = SimpleNamespace(
+        ruimte_id=9, bedrijf_id=1, ruimte_type_id=None, vestiging_id=6,
+        nummer=None, naam="Behandelkamer", kleur_hex=None,
+    )
+    vestiging = SimpleNamespace(naam="Vestiging Noord")
+
+    class HashableNamespace(SimpleNamespace):
+        __hash__ = object.__hash__
+
+    kast_a = HashableNamespace(kast_id=4, naam="Kast A", ruimte_id=9)
+    kast_b = HashableNamespace(kast_id=5, naam="Kast B", ruimte_id=9)
+
+    class Query:
+        def __init__(self, first_value=None, all_values=None):
+            self.first_value = first_value
+            self.all_values = all_values or []
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def filter_by(self, **kwargs):
+            return self
+
+        def join(self, *args, **kwargs):
+            return self
+
+        def outerjoin(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return self.first_value
+
+        def all(self):
+            return self.all_values
+
+    class FakeSession:
+        def query(self, *models):
+            model = models[0] if models else None
+            if model is app_module.Ruimte:
+                return Query(first_value=room)
+            if model is app_module.Vestiging:
+                return Query(first_value=vestiging)
+            if model is app_module.Kast:
+                return Query(all_values=[kast_a, kast_b])
+            return Query(all_values=[])
+
     class FakeField:
         def __eq__(self, other):
             return True
 
-    monkeypatch.setattr(
-        app_module,
-        "Voorraad_Positie",
-        SimpleNamespace(
-            lokaal_artikel_id=FakeField(),
-            kast_id=FakeField(),
-            bedrijf_id=FakeField(),
-        ),
-    )
-    monkeypatch.setattr(
-        app_module,
-        "Lokaal_Artikel",
-        SimpleNamespace(
-            lokaal_artikel_id=FakeField(),
-            global_id=FakeField(),
-            eigen_naam=FakeField(),
-        ),
-    )
-    monkeypatch.setattr(
-        app_module,
-        "Global_Catalogus",
-        SimpleNamespace(global_id=FakeField()),
-    )
+    for name, fields in {
+        "Ruimte": ["ruimte_id", "bedrijf_id"],
+        "Vestiging": ["vestiging_id", "bedrijf_id"],
+        "Kast": ["kast_id", "ruimte_id", "bedrijf_id", "naam"],
+        "Voorraad_Positie": ["kast_id", "bedrijf_id", "lokaal_artikel_id"],
+        "Lokaal_Artikel": ["lokaal_artikel_id", "global_id", "eigen_naam"],
+        "Global_Catalogus": ["global_id"],
+    }.items():
+        monkeypatch.setattr(
+            app_module,
+            name,
+            SimpleNamespace(**{field: FakeField() for field in fields}),
+        )
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
     monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
 
-    response = app_module.app.test_client().get("/assistent/kast/4")
+    response = app_module.app.test_client().get("/assistent/kamer/9?open_kast=5")
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert "Kast A" in html
-    assert "Kanban-kaartjes (1)" in html
-    assert "Locatiekaartjes (1)" in html
-    assert "Min 3" in html
-    assert "Aanv. 4" in html
-    assert "Max:" not in html
-    assert '"maxLevel"' not in html
+    # Kast B's accordion is open (no "collapsed"), Kast A's is collapsed.
+    heading_b = html.index("Kast B")
+    heading_a = html.index("Kast A")
+    assert "collapsed" not in html[max(0, heading_b - 400):heading_b]
+    assert "collapsed" in html[max(0, heading_a - 400):heading_a]
 
 
 def test_effective_change_supersedes_existing_kanban_card(
@@ -2409,11 +2542,13 @@ def test_room_page_renders_effective_kanban_values(
         ruimte_id=9,
         bedrijf_id=1,
         ruimte_type_id=8,
+        vestiging_id=6,
         nummer=None,
         naam="Behandelkamer",
         kleur_hex=None,
     )
     room_type = SimpleNamespace(kleur_hex="#123456")
+    vestiging = SimpleNamespace(vestiging_id=6, naam="Vestiging Noord")
     class FakeKast:
         kast_id = 4
         ruimte_id = 9
@@ -2481,11 +2616,17 @@ def test_room_page_renders_effective_kanban_values(
     )
     monkeypatch.setattr(
         app_module,
+        "Vestiging",
+        SimpleNamespace(vestiging_id=FakeField(), bedrijf_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module,
         "Kast",
         SimpleNamespace(
             kast_id=FakeField(),
             ruimte_id=FakeField(),
             bedrijf_id=FakeField(),
+            naam=FakeField(),
         ),
     )
     monkeypatch.setattr(
@@ -2519,6 +2660,8 @@ def test_room_page_renders_effective_kanban_values(
                 return Query(first_value=room)
             if model is app_module.Ruimte_Type:
                 return Query(first_value=room_type)
+            if model is app_module.Vestiging:
+                return Query(first_value=vestiging)
             if model is app_module.Kast:
                 return Query(all_values=[storage_location])
             if len(models) == 3:

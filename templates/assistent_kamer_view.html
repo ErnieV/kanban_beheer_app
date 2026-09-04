@@ -5,6 +5,7 @@
         <a href="{{ url_for('assistent_kamers') }}" class="text-decoration-none text-muted mb-1 d-block">
             <i class="bi bi-arrow-left"></i> Terug naar overzicht
         </a>
+        {% if vestiging %}<div class="text-muted small mb-1">{{ vestiging.naam }}</div>{% endif %}
         <h2>
             <i class="bi bi-door-open-fill" style="color: {{ ruimte.kleur_hex if ruimte.kleur_hex else '#333' }};"></i> 
             {% if ruimte.nummer %}{{ ruimte.nummer }} - {% endif %}{{ ruimte.naam }}
@@ -39,7 +40,7 @@
     <div class="accordion-item mb-3 shadow-sm border">
         <h2 class="accordion-header" id="heading{{ kast.kast_id }}">
             <div class="d-flex justify-content-between align-items-center bg-white px-3 py-2 border-bottom">
-                <button class="accordion-button {% if not loop.first %}collapsed{% endif %} fw-bold shadow-none border-0 p-0" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ kast.kast_id }}">
+                <button class="accordion-button {% if kast.kast_id != open_kast_id %}collapsed{% endif %} fw-bold shadow-none border-0 p-0" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ kast.kast_id }}">
                     <i class="bi bi-box-seam me-2"></i> {{ kast.naam }} 
                     <span class="text-muted fw-normal ms-2 small">({{ kast.type_opslag }})</span>
                 </button>
@@ -58,7 +59,7 @@
                 </div>
             </div>
         </h2>
-        <div id="collapse{{ kast.kast_id }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}" data-bs-parent="#kastenAccordion">
+        <div id="collapse{{ kast.kast_id }}" class="accordion-collapse collapse {% if kast.kast_id == open_kast_id %}show{% endif %}" data-bs-parent="#kastenAccordion">
             <div class="accordion-body bg-light-subtle">
                 
                 <div class="table-responsive bg-white rounded shadow-sm mb-3">
