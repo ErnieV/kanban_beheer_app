@@ -1395,6 +1395,20 @@ def send_queue_item_to_print_service(queue_item, source_map=None):
         return False, f"Printservice fout: {exc}"
 
 
+# BadgyAutomation's print-location-cards contract (its own issue #2) requires
+# the English literal "STANDARD", distinct from this codebase's Dutch domain
+# vocabulary "STANDAARD" (CONTEXT.md) used everywhere else. This mapping is a
+# wire-contract concern only — it must not leak into the domain model.
+_LOCATION_CARD_MATERIAL_TYPES = {
+    Materiaaltype.KANBAN: "KANBAN",
+    Materiaaltype.STANDAARD: "STANDARD",
+}
+
+
+def _location_card_material_type(material_type):
+    return _LOCATION_CARD_MATERIAL_TYPES[material_type]
+
+
 def build_location_cards_payload(versions, print_batch_id=None):
     """Build the stable, printer-independent A4 Locatiekaart contract."""
     versions = list(versions or [])
@@ -1450,11 +1464,11 @@ def build_location_cards_payload(versions, print_batch_id=None):
             "company": {
                 "logo": company_logo,
             },
-            "materialType": material_type.value,
+            "materialType": _location_card_material_type(material_type),
             "location": {
-                "branchName": getattr(version, 'vestiging_naam', None) or '',
-                "roomName": getattr(version, 'ruimte_naam', None) or '',
-                "storageLocationName": (
+                "site": getattr(version, 'vestiging_naam', None) or '',
+                "room": getattr(version, 'ruimte_naam', None) or '',
+                "storageLocation": (
                     getattr(version, 'opslaglocatie_naam', None) or ''
                 ),
             },
@@ -1479,16 +1493,8 @@ def build_location_cards_payload(versions, print_batch_id=None):
         "cardType": LOCATION_CARDS_CARD_TYPE,
         "cards": cards,
         "options": {
-            "paper": "A4",
             "orientation": "portrait",
-            "cardSize": {
-                "widthMm": 90,
-                "heightMm": 60,
-            },
-            "cardsPerSheet": 8,
-            "color": True,
-            "duplex": True,
-            "duplexFlip": "long-edge",
+            "doubleSided": True,
         },
     }
 

@@ -57,13 +57,8 @@ def test_location_card_contract_builds_a4_batch_without_layout_coordinates_or_ma
     assert payload["printerId"] == "location-cards-a4-01"
     assert payload["cardType"] == "LOCATION_A4_DUPLEX"
     assert payload["options"] == {
-        "paper": "A4",
         "orientation": "portrait",
-        "cardSize": {"widthMm": 90, "heightMm": 60},
-        "cardsPerSheet": 8,
-        "color": True,
-        "duplex": True,
-        "duplexFlip": "long-edge",
+        "doubleSided": True,
     }
     assert payload["cards"][0] == {
         "cardId": "1",
@@ -77,9 +72,9 @@ def test_location_card_contract_builds_a4_batch_without_layout_coordinates_or_ma
         "materialType": "KANBAN",
         "logistics": {"minLevel": 5},
         "location": {
-            "branchName": "Vestiging",
-            "roomName": "1 Behandelkamer",
-            "storageLocationName": "Kast A",
+            "site": "Vestiging",
+            "room": "1 Behandelkamer",
+            "storageLocation": "Kast A",
         },
         "roomType": {
             "name": "Behandeling",
@@ -87,7 +82,10 @@ def test_location_card_contract_builds_a4_batch_without_layout_coordinates_or_ma
         },
     }
     assert payload["cards"][1]["cardId"] == "2"
-    assert payload["cards"][1]["materialType"] == "STANDAARD"
+    # BadgyAutomation's contract (its own issue #2) requires the English
+    # literal "STANDARD" here, distinct from the Dutch domain vocabulary
+    # "STANDAARD" used everywhere else in this codebase (CONTEXT.md).
+    assert payload["cards"][1]["materialType"] == "STANDARD"
     assert "logistics" not in payload["cards"][1]
     assert "maxLevel" not in str(payload)
     assert "voorraad_positie_id" not in str(payload)
@@ -267,8 +265,10 @@ def test_location_card_contract_supports_more_than_one_a4_sheet_and_configured_p
     payload = app_module.build_location_cards_payload(versions)
 
     assert payload["printerId"] == "location-cards-a4-02"
+    # Sheet chunking (8 cards/sheet) is BadgyAutomation's own concern; the
+    # beheerapp sends the full flat card list and doesn't split or count
+    # sheets itself.
     assert len(payload["cards"]) == 9
-    assert payload["options"]["cardsPerSheet"] == 8
 
 
 def test_location_card_contract_generates_a_unique_batch_id_when_omitted(
