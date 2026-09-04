@@ -36,8 +36,11 @@ jobs:
           if-no-files-found: error
           path: |
             app.py
+            kanban_domain.py
+            kanban_migration.py
             requirements.txt
             templates/**
+            scripts/**
             .env.example
             !**/__pycache__/**
             !**/*.pyc
@@ -60,6 +63,7 @@ jobs:
         run: |
           ls -la deploy_artifact
           test -f deploy_artifact/app.py
+          test -f deploy_artifact/kanban_domain.py
           test -f deploy_artifact/requirements.txt
           test -d deploy_artifact/templates
 
