@@ -2627,3 +2627,79 @@ def test_inventory_and_scan_reports_render_effective_kanban_values(
         assert "Max" not in html
     assert "Standaard" in inventory_html
     assert "Standaard" in inventory_print_html
+
+
+def test_nieuwe_ruimte_rejects_missing_kamertype(app_module, monkeypatch):
+    """Regression test: a Ruimte without a Kamertype can't produce a valid
+    Locatiekaart (BadgyAutomation requires roomType.name/color as non-null
+    strings), and the DB column is now NOT NULL. Reject at creation time
+    instead of letting a bad row reach the database.
+    """
+    vestiging = SimpleNamespace(vestiging_id=1, bedrijf_id=1, naam="Hoofdvestiging")
+    added = []
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "get_scoped_item",
+        lambda model, item_id, bedrijf_id: (
+            vestiging if model is app_module.Vestiging else None
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "db",
+        SimpleNamespace(
+            session=SimpleNamespace(
+                add=lambda item: added.append(item),
+                commit=lambda: None,
+            )
+        ),
+    )
+
+    response = _csrf_client(app_module).post(
+        "/beheer/infra",
+        data={
+            "_csrf_token": "test-csrf",
+            "actie": "nieuwe_ruimte",
+            "vestiging_id": "1",
+            "naam": "Nieuwe Kamer",
+        },
+    )
+
+    assert response.status_code == 302
+    assert added == []
+
+
+def test_update_ruimte_rejects_missing_kamertype(app_module, monkeypatch):
+    ruimte = SimpleNamespace(
+        ruimte_id=2,
+        bedrijf_id=1,
+        naam="Behandelkamer",
+        nummer="113",
+        ruimte_type_id=5,
+    )
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "get_scoped_item",
+        lambda model, item_id, bedrijf_id: (
+            ruimte if model is app_module.Ruimte else None
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "db",
+        SimpleNamespace(session=SimpleNamespace(commit=lambda: None)),
+    )
+
+    response = _csrf_client(app_module).post(
+        "/beheer/update/ruimte/2",
+        data={"_csrf_token": "test-csrf", "naam": "Behandelkamer", "nummer": "113"},
+    )
+
+    assert response.status_code == 302
+    assert ruimte.ruimte_type_id == 5

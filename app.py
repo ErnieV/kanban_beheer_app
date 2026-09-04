@@ -3125,7 +3125,11 @@ def beheer_infra():
                 if not vestiging:
                     flash('Vestiging niet gevonden of geen toegang.', 'warning')
                     return redirect(url_for('beheer_infra'))
-                nieuwe_ruimte = Ruimte(bedrijf_id=bedrijf_id, vestiging_id=vest_id, naam=request.form.get('naam'), nummer=request.form.get('nummer'), ruimte_type_id=request.form.get('ruimte_type_id'), type_ruimte='KAMER')
+                ruimte_type_id = request.form.get('ruimte_type_id', type=int)
+                if not ruimte_type_id or not get_scoped_item(Ruimte_Type, ruimte_type_id, bedrijf_id):
+                    flash('Kies een geldig Kamertype.', 'warning')
+                    return redirect(url_for('beheer_infra', vestiging_id=vest_id))
+                nieuwe_ruimte = Ruimte(bedrijf_id=bedrijf_id, vestiging_id=vest_id, naam=request.form.get('naam'), nummer=request.form.get('nummer'), ruimte_type_id=ruimte_type_id, type_ruimte='KAMER')
                 db.session.add(nieuwe_ruimte)
                 db.session.flush()
                 kopieer_id = request.form.get('kopieer_van_ruimte_id', type=int)
@@ -3263,15 +3267,19 @@ def update_item(type, id):
             if not item:
                 flash('Ruimte niet gevonden of geen toegang.', 'warning')
                 return redirect(request.referrer or url_for('beheer_infra'))
+            ruimte_type_id = request.form.get('ruimte_type_id', type=int)
+            if not ruimte_type_id or not get_scoped_item(Ruimte_Type, ruimte_type_id, bedrijf_id):
+                flash('Kies een geldig Kamertype.', 'warning')
+                return redirect(request.referrer or url_for('beheer_infra'))
             changed = (
                 getattr(item, 'naam', None) != request.form.get('naam')
                 or getattr(item, 'nummer', None) != request.form.get('nummer')
                 or str(getattr(item, 'ruimte_type_id', None) or '')
-                != str(request.form.get('ruimte_type_id') or '')
+                != str(ruimte_type_id)
             )
             item.naam = request.form.get('naam')
             item.nummer = request.form.get('nummer')
-            item.ruimte_type_id = request.form.get('ruimte_type_id', type=int)
+            item.ruimte_type_id = ruimte_type_id
             if changed:
                 _supersede_locatiekaart_versions_for_position_ids(
                     _position_ids_for_scope('ruimte', id)
