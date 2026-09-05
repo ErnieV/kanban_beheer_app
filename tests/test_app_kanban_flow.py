@@ -3101,6 +3101,10 @@ def test_room_page_renders_effective_kanban_values(
     assert 'data-confirm-delete="Verband uit Kast A verwijderen?"' in html
     # Ticket #16: artikel-toevoegen is doorzoekbaar op naam.
     assert "data-artikel-filter" in html
+    # Ticket #21: icoon-only knoppen hebben een toegankelijke naam.
+    assert 'aria-label="Kanban-kaartje aanvragen voor Verband"' in html
+    assert 'aria-label="Verband verwijderen"' in html
+    assert 'aria-label="Artikel toevoegen aan deze opslaglocatie"' in html
     assert "data-artikel-select" in html
 
 
@@ -3336,6 +3340,67 @@ def test_print_list_macros_see_the_calling_template_context(app_module):
 
     assert "https://example.test/logo.png" in kamerlijst_html
     assert "https://example.test/logo.png" in scanlijst_html
+
+
+def test_beheer_infra_edit_and_delete_buttons_have_accessible_names(app_module):
+    """Ticket #21 AC2: de bewerk- en verwijderknoppen in Beheer (Vestiging,
+    Ruimte, Opslaglocatie) hebben een toegankelijke naam die de actie én
+    het item beschrijft, niet alleen een los icoontje.
+    """
+    vestiging = SimpleNamespace(vestiging_id=1, naam="Vestiging Noord", adres="")
+    ruimte = SimpleNamespace(
+        ruimte_id=1, naam="Behandelkamer", nummer=None, ruimte_type_id=None,
+    )
+    kast = SimpleNamespace(kast_id=1, naam="Verbandkast", type_opslag="GRIJP")
+
+    with app_module.app.test_request_context("/"):
+        html = app_module.render_template(
+            "beheer_infra.html",
+            vestigingen=[vestiging], ruimtes=[ruimte], kasten=[kast],
+            ruimte_types=[], alle_ruimtes=[],
+            active_vestiging_id=1, active_ruimte_id=1,
+        )
+
+    assert 'aria-label="Vestiging Noord bewerken"' in html
+    assert 'aria-label="Vestiging Noord verwijderen"' in html
+    assert 'aria-label="Behandelkamer bewerken"' in html
+    assert 'aria-label="Behandelkamer verwijderen"' in html
+    assert 'aria-label="Verbandkast bewerken"' in html
+    assert 'aria-label="Verbandkast verwijderen"' in html
+    # Modal-sluitknoppen (Bootstrap's .btn-close) zijn ook icoon-only.
+    assert html.count('aria-label="Close"') >= 3
+
+
+def test_beheer_catalogus_edit_delete_and_koppel_buttons_have_accessible_names(
+    app_module,
+):
+    """Ticket #21 AC2: 'Beheer' omvat ook de Centrale Catalogus (zelfde
+    dropdown-menu-item als Ruimtes & Opslaglocaties) — dezelfde bewerk-/
+    verwijder-/koppel-knoppen krijgen dezelfde toegankelijke-naam-behandeling.
+    """
+    linked_item = SimpleNamespace(
+        global_id=1, generieke_naam="Catalogusverband",
+        foto_url=None, ean_code=None, categorie="Algemeen",
+    )
+    unlinked_item = SimpleNamespace(
+        global_id=2, generieke_naam="Pleisters XL",
+        foto_url=None, ean_code=None, categorie="Algemeen",
+    )
+
+    with app_module.app.test_request_context("/"):
+        html = app_module.render_template(
+            "beheer_catalogus.html",
+            globals=[linked_item, unlinked_item],
+            lokale_ids=[1],
+        )
+
+    assert 'aria-label="Catalogusverband bewerken"' in html
+    assert 'aria-label="Catalogusverband verwijderen"' in html
+    assert 'aria-label="Pleisters XL bewerken"' in html
+    assert 'aria-label="Pleisters XL verwijderen"' in html
+    assert 'aria-label="Pleisters XL gebruiken in mijn bedrijf"' in html
+    assert 'aria-label="Catalogusverband is al in gebruik"' in html
+    assert html.count('aria-label="Close"') >= 2
 
 
 def test_dashboard_menu_and_pages_use_one_consistent_name_per_page(app_module):

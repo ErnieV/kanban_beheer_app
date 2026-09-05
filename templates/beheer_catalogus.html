@@ -79,23 +79,25 @@
                             <td class="text-end">
                                 <div class="btn-group">
                                     <!-- Bewerk Knop -->
-                                    <button class="btn btn-sm btn-outline-secondary" 
-                                            data-bs-toggle="modal" 
+                                    <button class="btn btn-sm btn-outline-secondary"
+                                            data-bs-toggle="modal"
                                             data-bs-target="#editGlobalModal"
                                             data-id="{{ item.global_id }}"
                                             data-naam="{{ item.generieke_naam }}"
                                             data-ean="{{ item.ean_code or '' }}"
-                                            data-categorie="{{ item.categorie }}">
-                                        <i class="bi bi-pencil"></i>
+                                            data-categorie="{{ item.categorie }}"
+                                            title="{{ item.generieke_naam }} bewerken" aria-label="{{ item.generieke_naam }} bewerken">
+                                        <i class="bi bi-pencil" aria-hidden="true"></i>
                                     </button>
 
                                     <!-- Verwijder Knop -->
-                                    <button class="btn btn-sm btn-outline-danger" 
-                                            data-bs-toggle="modal" 
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            data-bs-toggle="modal"
                                             data-bs-target="#deleteGlobalModal"
                                             data-id="{{ item.global_id }}"
-                                            data-naam="{{ item.generieke_naam }}">
-                                        <i class="bi bi-trash"></i>
+                                            data-naam="{{ item.generieke_naam }}"
+                                            title="{{ item.generieke_naam }} verwijderen" aria-label="{{ item.generieke_naam }} verwijderen">
+                                        <i class="bi bi-trash" aria-hidden="true"></i>
                                     </button>
 
                                     <!-- Koppel Knop (Als nog niet lokaal) -->
@@ -104,13 +106,13 @@
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                         <input type="hidden" name="actie" value="koppel_lokaal">
                                         <input type="hidden" name="global_id" value="{{ item.global_id }}">
-                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Gebruik in mijn bedrijf">
-                                            <i class="bi bi-plus-lg"></i>
+                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="{{ item.generieke_naam }} gebruiken in mijn bedrijf" aria-label="{{ item.generieke_naam }} gebruiken in mijn bedrijf">
+                                            <i class="bi bi-plus-lg" aria-hidden="true"></i>
                                         </button>
                                     </form>
                                     {% else %}
-                                        <button class="btn btn-sm btn-light text-success" disabled title="Al in gebruik">
-                                            <i class="bi bi-check"></i>
+                                        <button class="btn btn-sm btn-light text-success" disabled title="{{ item.generieke_naam }} is al in gebruik" aria-label="{{ item.generieke_naam }} is al in gebruik">
+                                            <i class="bi bi-check" aria-hidden="true"></i>
                                         </button>
                                     {% endif %}
                                 </div>
@@ -136,7 +138,7 @@
                 <input type="hidden" name="global_id" id="editId">
                 <div class="modal-header">
                     <h5 class="modal-title">Global Item Bewerken</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <div class="alert alert-warning small">
@@ -182,7 +184,7 @@
                 <input type="hidden" name="global_id" id="deleteId">
                 <div class="modal-header bg-danger text-white">
                     <h5 class="modal-title">Global Item Verwijderen</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <p>Weet je zeker dat je <strong><span id="deleteNaam"></span></strong> wilt verwijderen uit de globale catalogus?</p>

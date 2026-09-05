@@ -128,16 +128,17 @@
                                         <!-- ENKEL PRINT KNOP -->
                                         <form action="{{ url_for('kanban_aanvragen_enkel', voorraad_positie_id=pos.voorraad_positie_id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" data-print-enkel-button class="btn btn-sm btn-outline-secondary" title="{% if effectieve_kanban %}Kanban-kaartje aanvragen{% else %}Standaard materiaal heeft geen Kanban-kaart{% endif %}" {% if not effectieve_kanban %}disabled{% endif %}>
-                                                <i class="bi bi-printer"></i>
+                                            {% set print_enkel_label = 'Kanban-kaartje aanvragen voor ' + lokaal.eigen_naam if effectieve_kanban else 'Standaard materiaal heeft geen Kanban-kaart' %}
+                                            <button type="submit" data-print-enkel-button class="btn btn-sm btn-outline-secondary" title="{{ print_enkel_label }}" aria-label="{{ print_enkel_label }}" {% if not effectieve_kanban %}disabled{% endif %}>
+                                                <i class="bi bi-printer" aria-hidden="true"></i>
                                             </button>
                                         </form>
 
                                         <!-- VERWIJDER KNOP -->
                                         <form action="{{ url_for('verwijder_item', type='voorraad', id=pos.voorraad_positie_id) }}" method="POST" class="d-inline" data-confirm-delete="{{ lokaal.eigen_naam }} uit {{ kast.naam }} verwijderen?">
                                             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="btn btn-sm btn-outline-danger">
-                                                <i class="bi bi-trash"></i>
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" title="{{ lokaal.eigen_naam }} verwijderen" aria-label="{{ lokaal.eigen_naam }} verwijderen">
+                                                <i class="bi bi-trash" aria-hidden="true"></i>
                                             </button>
                                         </form>
                                     </div>
@@ -169,7 +170,7 @@
                         </select>
                     </div>
                     <div class="col-auto">
-                        <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-plus"></i></button>
+                        <button type="submit" class="btn btn-sm btn-success" title="Artikel toevoegen aan deze opslaglocatie" aria-label="Artikel toevoegen aan deze opslaglocatie"><i class="bi bi-plus" aria-hidden="true"></i></button>
                     </div>
                 </form>
 
