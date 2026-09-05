@@ -4368,3 +4368,315 @@ def test_beheer_infra_renders_explicit_ruimte_inrichting_choice(app_module, monk
     assert 'name="inrichting_keuze"' in html
     assert "- Lege -" not in html  # het oude, naamloze dropdown-label mag niet terugkomen
     assert 'name="kopieer_bevestigd"' in html
+
+
+def test_flash_safe_error_logs_technical_detail_and_shows_only_the_safe_message(
+    app_module, caplog
+):
+    """Ticket #34: the shared safe-error helper logs the real cause
+    server-side and flashes only the given safe message — never the raw
+    technical detail. Direct unit test of the helper, independent of any
+    specific call site.
+    """
+    with app_module.app.test_request_context():
+        with caplog.at_level("ERROR"):
+            app_module._flash_safe_error(
+                "test_context", "raw technical detail xyz", "Veilige melding."
+            )
+        flashes = app_module.session.get("_flashes", [])
+
+    flash_messages = " ".join(message for _, message in flashes)
+    assert flash_messages == "Veilige melding."
+    assert "raw technical detail xyz" not in flash_messages
+    assert "test_context: raw technical detail xyz" in caplog.text
+
+
+def test_nieuw_bedrijf_unexpected_failure_redacts_technical_detail(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #34: an unexpected failure while creating a Bedrijf must show
+    only the safe, action-labeled 'aanmaken' message — never the raw
+    exception — while the real cause is logged server-side. The existing
+    IntegrityError branch (duplicate name) is untouched by this change.
+    """
+    class FakeSession:
+        def add(self, item):
+            pass
+
+        def commit(self):
+            raise RuntimeError("connection reset by peer")
+
+        def rollback(self):
+            pass
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "Bedrijf", SimpleNamespace)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/bedrijf/nieuw",
+            data={"_csrf_token": "test-csrf", "naam": "Nieuw Bedrijf"},
+        )
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "connection reset by peer" not in flash_messages
+    assert "Aanmaken is niet gelukt" in flash_messages
+    assert "connection reset by peer" in caplog.text
+
+
+def test_print_selectie_unexpected_failure_redacts_technical_detail(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #34: an unexpected failure while staging a Kanban-kaartje
+    selection into the Printwachtrij (outside the per-item printservice-
+    send path already covered by ticket #30) must show only the safe
+    'aanvragen' message — never the raw exception — while the real cause is
+    logged server-side.
+    """
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9, naam="Kast A")
+    company = SimpleNamespace(bedrijf_id=1, logo_url="logo.png")
+    branch = SimpleNamespace(naam="Vestiging")
+    room = SimpleNamespace(naam="Behandelkamer", nummer=None)
+    room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        lokaal_artikel_id=7,
+        materiaaltype="KANBAN",
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        eigen_naam="Verband",
+        foto_url="verband.png",
+        verpakkingseenheid_tekst="doos",
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+    row = (position, article, None, kast, room, room_type, company, branch)
+
+    class FakeQuery:
+        def all(self):
+            return [row]
+
+    class FakeSession:
+        def add(self, item):
+            pass
+
+        def commit(self):
+            raise RuntimeError("deadlock detected")
+
+        def rollback(self):
+            pass
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: kast)
+    monkeypatch.setattr(app_module, "_kast_inventory_query", lambda *args: FakeQuery())
+    monkeypatch.setattr(app_module, "create_queue_item", lambda *row: "queue-item")
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/assistent/kast/4/print/kanban",
+            data={"_csrf_token": "test-csrf", "position_ids": ["12"]},
+        )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200  # re-rendert de selectiepagina
+    assert "deadlock detected" not in html
+    assert "Aanvragen is niet gelukt" in html
+    assert "deadlock detected" in caplog.text
+
+
+def test_kanban_aanvragen_enkel_unexpected_failure_redacts_technical_detail(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #34: an unexpected failure while requesting a single Kanban
+    card must show only the safe 'aanvragen' message — never the raw
+    exception — while the real cause is logged server-side.
+    """
+    position = SimpleNamespace(voorraad_positie_id=12, materiaaltype="KANBAN")
+    row = (position, "artikel", None, "kast", "ruimte", "ruimte_type", "bedrijf")
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+    class Query:
+        def join(self, *args, **kwargs):
+            return self
+
+        def outerjoin(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return row
+
+    class FakeSession:
+        def query(self, *models):
+            return Query()
+
+        def add(self, item):
+            pass
+
+        def commit(self):
+            raise RuntimeError("connection reset by peer")
+
+        def rollback(self):
+            pass
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+    monkeypatch.setattr(app_module, "create_queue_item", lambda *row: "queue-item")
+    monkeypatch.setattr(
+        app_module,
+        "Voorraad_Positie",
+        SimpleNamespace(
+            lokaal_artikel_id=FakeField(),
+            kast_id=FakeField(),
+            bedrijf_id=FakeField(),
+            voorraad_positie_id=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Lokaal_Artikel",
+        SimpleNamespace(lokaal_artikel_id=FakeField(), global_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module, "Global_Catalogus", SimpleNamespace(global_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Kast",
+        SimpleNamespace(kast_id=FakeField(), ruimte_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Ruimte",
+        SimpleNamespace(ruimte_id=FakeField(), ruimte_type_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module, "Ruimte_Type", SimpleNamespace(ruimte_type_id=FakeField()),
+    )
+    monkeypatch.setattr(
+        app_module, "Bedrijf", SimpleNamespace(bedrijf_id=FakeField()),
+    )
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/assistent/kanban/aanvragen/enkel/12",
+            data={"_csrf_token": "test-csrf"},
+            headers={},  # geen Referer
+        )
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "connection reset by peer" not in flash_messages
+    assert "Aanvragen is niet gelukt" in flash_messages
+    assert "connection reset by peer" in caplog.text
+
+
+def test_verwijder_item_unexpected_failure_redacts_technical_detail(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #34: an unexpected failure while deleting an item — e.g. a
+    Ruimtetype still referenced by a Ruimte, hitting a real database
+    foreign-key constraint (FK_Ruimte_Type) — must show only the safe
+    'verwijderen' message — never the raw exception — while the real cause
+    is logged server-side.
+    """
+    ruimte_type = SimpleNamespace(ruimte_type_id=3, bedrijf_id=1)
+
+    class FakeSession:
+        def delete(self, item):
+            raise RuntimeError(
+                "(pyodbc.IntegrityError) The DELETE statement conflicted "
+                "with the REFERENCE constraint FK_Ruimte_Type"
+            )
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: ruimte_type)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/beheer/verwijder/ruimte_type/3",
+            data={"_csrf_token": "test-csrf"},
+        )
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "FK_Ruimte_Type" not in flash_messages
+    assert "IntegrityError" not in flash_messages
+    assert "Verwijderen is niet gelukt" in flash_messages
+    assert "FK_Ruimte_Type" in caplog.text
+
+
+def test_update_item_unexpected_failure_redacts_technical_detail(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #34: an unexpected failure while updating an item must show
+    only the safe 'bijwerken' message — never the raw exception — while the
+    real cause is logged server-side.
+    """
+    ruimte_type = SimpleNamespace(
+        ruimte_type_id=3, bedrijf_id=1, naam="Oud", kleur_hex="#111111",
+    )
+
+    class FakeSession:
+        def commit(self):
+            raise RuntimeError("connection reset by peer")
+
+        def rollback(self):
+            pass
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", lambda *args: ruimte_type)
+    monkeypatch.setattr(
+        app_module,
+        "_supersede_locatiekaart_versions_for_position_ids",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(app_module, "_position_ids_for_scope", lambda *a, **k: [])
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/beheer/update/ruimte_type/3",
+            data={"_csrf_token": "test-csrf", "naam": "Nieuw", "kleur": "#222222"},
+        )
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "connection reset by peer" not in flash_messages
+    assert "Bijwerken is niet gelukt" in flash_messages
+    assert "connection reset by peer" in caplog.text

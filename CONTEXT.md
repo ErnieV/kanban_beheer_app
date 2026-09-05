@@ -60,3 +60,8 @@ Een concrete inhoudelijke versie van een Locatiekaart. Een wijziging aan het art
 
 **Printbatch**:
 Een door de gebruiker geselecteerde groep kaartjes die als één printopdracht wordt verwerkt.
+
+## Foutmeldingen
+
+**Veilige foutmelding**:
+Bij een onverwachte fout in een generieke dispatcher-route (één route-handler voor meerdere entiteittypen of acties) toont de gebruiker nooit de ruwe technische foutdetail — geen exceptietekst, URL, database- of HTTP-detail. In plaats daarvan verschijnt een actie-benoemde, generieke melding die qua register aansluit bij de bestaande succesmelding van diezelfde route (bijvoorbeeld "Verwijderd." bij succes naast "Verwijderen is niet gelukt. Er is niets verwijderd. Probeer het later opnieuw, of vraag hulp." bij een onverwachte fout). De technische oorzaak wordt altijd server-side gelogd. Een reeds-bekende, specifieke foutsituatie (bijvoorbeeld een dubbele naam) krijgt een eigen, behulpzame melding vóór deze generieke fallback.

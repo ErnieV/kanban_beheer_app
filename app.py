@@ -1022,7 +1022,7 @@ def _image_to_base64_object(image_source, label):
         # bewust ongeredigeerd aan de assistente worden getoond — dus mag hij
         # zelf geen technisch detail bevatten. De echte oorzaak gaat naar de
         # serverlogging.
-        _log_print_failure(f"_image_to_base64_object {label}", exc)
+        _log_technical_error(f"_image_to_base64_object {label}", exc)
         return None, f"{label} kon niet worden opgehaald."
 
     content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
@@ -1709,8 +1709,10 @@ def nieuw_bedrijf():
             flash('Een bedrijf met deze naam bestaat al.', 'warning')
         except Exception as e:
             db.session.rollback()
-            flash(f'Fout bij aanmaken: {e}', 'danger')
-            
+            _flash_safe_error(
+                "nieuw_bedrijf", e, _SAFE_ERROR_MESSAGE_AANMAKEN,
+            )
+
     # Redirect naar beheer pagina zodat ze details kunnen invullen
     return redirect(url_for('beheer_bedrijf'))
 
@@ -2328,7 +2330,11 @@ def print_selectie(kaart_type, kast_id=None, ruimte_id=None):
             return redirect(url_for('assistent_kamer_view', ruimte_id=target_ruimte_id))
         except Exception as exc:
             db.session.rollback()
-            flash(f'Fout bij aanvragen: {exc}', 'danger')
+            _flash_safe_error(
+                f"print_selectie kaart_type={kaart_type}",
+                exc,
+                _SAFE_ERROR_MESSAGE_AANVRAGEN,
+            )
             return render(selected_ids)
 
     if selected_ids is None:
@@ -2377,8 +2383,11 @@ def kanban_aanvragen_enkel(voorraad_positie_id):
         flash("Kanban kaartje aangevraagd!", "success")
     except Exception as e:
         db.session.rollback()
-        print(e)
-        flash(f"Fout bij aanvragen: {e}", "danger")
+        _flash_safe_error(
+            f"kanban_aanvragen_enkel voorraad_positie_id={voorraad_positie_id}",
+            e,
+            _SAFE_ERROR_MESSAGE_AANVRAGEN,
+        )
 
     return redirect(request.referrer or url_for('assistent_kamers'))
 
@@ -2686,28 +2695,59 @@ def test_print_verbinding():
         flash(detail, 'danger')
     return redirect(url_for('assistent_print_queue'))
 
-def _log_print_failure(log_context, technical_detail):
-    """Ticket #30: gedeeld logformaat voor een mislukte printverzending, zodat
-    een enkel mislukt item (dat geen eigen flash krijgt binnen een batch) en
-    _flash_print_failure hetzelfde spoor achterlaten in de serverlogging.
+def _log_technical_error(log_context, technical_detail):
+    """Gedeeld logformaat voor een fout die veilig moet worden afgehandeld:
+    de technische oorzaak gaat naar de serverlogging, nooit naar de
+    gebruiker. Gebruikt door _flash_safe_error, en door aanroepers die zelf
+    al een aggregaatmelding tonen (zoals een batch met deels mislukte
+    items) en dus geen eigen flash per fout willen.
     """
     app.logger.error("%s: %s", log_context, technical_detail)
 
 
-def _flash_print_failure(log_context, technical_detail):
-    """Ticket #30: log de technische oorzaak met context in de
-    serverlogging, en toon de assistente alleen een veilige, begrijpelijke
-    melding — nooit een URL, HTTP-status, exceptionnaam, batch-/job-ID,
-    header, omgevingsvariabele of responsbody. Geldt voor beide
-    printstromen (Badgy en A4); de melding zegt altijd dat er niets is
-    geprint, dat de opdracht open blijft staan, en wat de assistente kan
-    doen.
+# Ticket #34: gedeelde, actie-benoemde veilige meldingen voor generieke
+# dispatcher-routes (CONTEXT.md: "Veilige foutmelding"). Elke melding sluit
+# qua register aan bij de bestaande succesmelding van diezelfde actie.
+_SAFE_ERROR_MESSAGE_AANMAKEN = (
+    'Aanmaken is niet gelukt. Er is niets opgeslagen. Probeer het later '
+    'opnieuw, of vraag hulp.'
+)
+_SAFE_ERROR_MESSAGE_BIJWERKEN = (
+    'Bijwerken is niet gelukt. Er is niets gewijzigd. Probeer het later '
+    'opnieuw, of vraag hulp.'
+)
+_SAFE_ERROR_MESSAGE_VERWIJDEREN = (
+    'Verwijderen is niet gelukt. Er is niets verwijderd. Probeer het later '
+    'opnieuw, of vraag hulp.'
+)
+_SAFE_ERROR_MESSAGE_AANVRAGEN = (
+    'Aanvragen is niet gelukt. Er is niets aangevraagd. Probeer het later '
+    'opnieuw, of vraag hulp.'
+)
+
+
+def _flash_safe_error(log_context, technical_detail, user_message):
+    """Log de technische oorzaak server-side en toon de gebruiker alleen
+    <user_message> — nooit een URL, HTTP-status, exceptionnaam, ID, header,
+    omgevingsvariabele, responsbody of andere technische detail. Gedeeld
+    door alle generieke dispatcher-routes (Beheer aanmaken/bijwerken/
+    verwijderen, kaartje-aanvragen, printverzending) — zie CONTEXT.md.
     """
-    _log_print_failure(log_context, technical_detail)
-    flash(
+    _log_technical_error(log_context, technical_detail)
+    flash(user_message, 'danger')
+
+
+def _flash_print_failure(log_context, technical_detail):
+    """Ticket #30: dunne wrapper rondom _flash_safe_error met de vaste,
+    printer-specifieke melding voor beide printstromen (Badgy en A4) —
+    zegt altijd dat er niets is geprint, dat de opdracht open blijft staan,
+    en wat de assistente kan doen.
+    """
+    _flash_safe_error(
+        log_context,
+        technical_detail,
         'De printer is niet bereikbaar. Er is niets geprint — de opdracht '
         'blijft openstaan. Probeer het later opnieuw, of vraag hulp.',
-        'danger',
     )
 
 
@@ -2771,7 +2811,7 @@ def _send_queue_items_and_flash(items):
             success_count += 1
         else:
             fail_count += 1
-            _log_print_failure(
+            _log_technical_error(
                 f"_send_queue_items_and_flash send print_id={item.print_id}",
                 error_msg,
             )
@@ -3428,7 +3468,11 @@ def verwijder_item(type, id):
             flash('Item niet gevonden of geen toegang.', 'warning')
     except Exception as e:
         db.session.rollback()
-        flash(f'Kan niet verwijderen: {e}', 'danger')
+        _flash_safe_error(
+            f"verwijder_item type={type} id={id}",
+            e,
+            _SAFE_ERROR_MESSAGE_VERWIJDEREN,
+        )
     return redirect(request.referrer or url_for('dashboard'))
 
 @app.route('/beheer/update/<type>/<int:id>', methods=['POST'])
@@ -3513,7 +3557,11 @@ def update_item(type, id):
         flash('Bijgewerkt.', 'success')
     except Exception as exc:
         db.session.rollback()
-        flash(f'Kan niet bijwerken: {exc}', 'danger')
+        _flash_safe_error(
+            f"update_item type={type} id={id}",
+            exc,
+            _SAFE_ERROR_MESSAGE_BIJWERKEN,
+        )
     return redirect(request.referrer or url_for('dashboard'))
 
 if __name__ == '__main__':
