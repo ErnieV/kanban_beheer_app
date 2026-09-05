@@ -2527,7 +2527,10 @@ def _group_scan_rows(rows):
     )
 
 
-def _get_kamerlijst_rows(bedrijf_id, ruimte_id=None):
+def _get_kamerlijst_rows(bedrijf_id, ruimte_id):
+    """Ticket #17: de Kamerlijst is Ruimte-gescoopt sinds het bedrijfsbrede
+    overzicht is vervallen — ruimte_id is dus altijd verplicht.
+    """
     query = db.session.query(
         Voorraad_Positie,
         Lokaal_Artikel,
@@ -2549,11 +2552,9 @@ def _get_kamerlijst_rows(bedrijf_id, ruimte_id=None):
     ).outerjoin(
         Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id
     ).filter(
-        Voorraad_Positie.bedrijf_id == bedrijf_id
+        Voorraad_Positie.bedrijf_id == bedrijf_id,
+        Ruimte.ruimte_id == ruimte_id,
     )
-
-    if ruimte_id is not None:
-        query = query.filter(Ruimte.ruimte_id == ruimte_id)
 
     return query.order_by(
         Vestiging.naam,
@@ -2619,17 +2620,12 @@ def assistent_scanlijst_reset():
     return redirect(url_for('assistent_scanlijst'))
 
 
-@app.route('/assistent/kamerlijst')
-def assistent_kamerlijst():
-    if not check_db():
-        return redirect(url_for('dashboard'))
-    bedrijf_id = get_huidig_bedrijf_id()
-    rows = _get_kamerlijst_rows(bedrijf_id)
-    return render_template('assistent_kamerlijst.html', grouped_rows=_group_kamerlijst_rows(rows))
-
-
 @app.route('/assistent/kamerlijst/print/<int:ruimte_id>')
 def assistent_kamerlijst_print(ruimte_id):
+    """Ticket #17: het bedrijfsbrede Kamerlijst-overzicht is vervallen — dit
+    is nu de enige weg naar de Kamerlijst, bereikt via een knop op de
+    Ruimte-pagina van precies die Ruimte.
+    """
     if not check_db():
         return redirect(url_for('dashboard'))
 
@@ -2640,7 +2636,7 @@ def assistent_kamerlijst_print(ruimte_id):
     ).first()
     if not ruimte:
         flash('Ruimte niet gevonden of geen toegang.', 'warning')
-        return redirect(url_for('assistent_kamerlijst'))
+        return redirect(url_for('assistent_kamers'))
 
     rows = _get_kamerlijst_rows(bedrijf_id, ruimte_id=ruimte_id)
     return render_template(

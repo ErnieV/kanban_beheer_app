@@ -1,0 +1,61 @@
+{#
+    Ticket #17: gedeelde opmaak voor de Kamerlijst- en Scanlijst-printweergave
+    (voorheen twee bijna-identieke sjablonen). Beide gebruiken deze kop
+    (titel precies één keer, logo, zichtbare terugweg naast window.print())
+    en dezelfde Vestiging/Ruimtetype/Ruimte-nesting, die alleen een
+    hiërarchieniveau toont als de huidige selectie daar meer dan één waarde
+    voor heeft. De inhoud per Opslaglocatie (de tabel zelf) verschilt tussen
+    Kamerlijst en Scanlijst en blijft daarom een caller-block in plaats van
+    onderdeel van deze macro.
+#}
+{% macro print_header(title, subtitle, back_url) %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+    <div class="d-flex align-items-center gap-3">
+        {% if huidig_bedrijf and huidig_bedrijf.logo_url %}
+            <img src="{{ huidig_bedrijf.logo_url }}" alt="Logo" style="max-height: 56px; max-width: 180px; object-fit: contain;">
+        {% endif %}
+        <div>
+            <h1 class="h3 mb-1">{{ title }}</h1>
+            <p class="text-muted mb-0">{{ subtitle }}</p>
+        </div>
+    </div>
+    <div class="d-flex align-items-center gap-2 no-print">
+        <a href="{{ back_url }}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Terug
+        </a>
+        <button class="btn btn-primary" onclick="window.print()">Print</button>
+    </div>
+</div>
+{% endmacro %}
+
+{% macro grouped_hierarchy(groups) %}
+    {% set show_vestiging = groups|length > 1 %}
+    {% for vestiging_group in groups %}
+    <section class="mb-4 section-break-avoid">
+        {% if show_vestiging %}
+        <h2 class="h5 border-bottom pb-2 mb-3">{{ vestiging_group.naam }}</h2>
+        {% endif %}
+        {% set show_ruimte_type = vestiging_group.ruimte_types|length > 1 %}
+        {% for ruimte_type_group in vestiging_group.ruimte_types %}
+        <div class="mb-3">
+            {% if show_ruimte_type %}
+            <div class="type-chip mb-2" style="background-color: {{ ruimte_type_group.kleur_hex }}20; border-left: 8px solid {{ ruimte_type_group.kleur_hex }};">
+                {{ ruimte_type_group.naam }}
+            </div>
+            {% endif %}
+            {% set show_ruimte = ruimte_type_group.ruimtes|length > 1 %}
+            {% for ruimte_group in ruimte_type_group.ruimtes %}
+            <div class="mb-3">
+                {% if show_ruimte %}
+                <h3 class="h6 mb-2">{% if ruimte_group.nummer %}{{ ruimte_group.nummer }} - {% endif %}{{ ruimte_group.naam }}</h3>
+                {% endif %}
+                {% for kast_group in ruimte_group.kasten %}
+                    {{ caller(kast_group) }}
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </section>
+    {% endfor %}
+{% endmacro %}

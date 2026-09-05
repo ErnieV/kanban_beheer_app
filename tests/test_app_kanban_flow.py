@@ -1312,6 +1312,10 @@ def test_room_page_exposes_independent_print_actions_with_counts(
     assert "Locatiekaartjes (2)" in html
     assert "/assistent/kamer/9/print/kanban" in html
     assert "/assistent/kamer/9/print/locatie" in html
+    # Ticket #17 AC2: de Ruimte-pagina heeft een knop om de Kamerlijst van
+    # deze Ruimte te printen.
+    assert "Kamerlijst printen" in html
+    assert "/assistent/kamerlijst/print/9" in html
 
 
 def _two_item_kast_fixture():
@@ -3028,7 +3032,7 @@ def test_inventory_and_scan_reports_render_effective_kanban_values(
         locatie_foto_url=None,
     )
     storage_location = SimpleNamespace(naam="Kast A", type_opslag="GRIJP")
-    room = SimpleNamespace(naam="Behandelkamer", nummer=None)
+    room = SimpleNamespace(ruimte_id=9, naam="Behandelkamer", nummer=None)
     room_type = SimpleNamespace(naam="Behandeling", kleur_hex="#123456")
     branch = SimpleNamespace(naam="Vestiging")
     inventory_rows = [
@@ -3061,11 +3065,9 @@ def test_inventory_and_scan_reports_render_effective_kanban_values(
         }],
     }]
 
+    # Ticket #17: het bedrijfsbrede Kamerlijst-scherm is vervallen — de
+    # Ruimte-gescoopte vervanger is de printweergave, al gerenderd hieronder.
     with app_module.app.test_request_context("/"):
-        inventory_html = app_module.render_template(
-            "assistent_kamerlijst.html",
-            grouped_rows=grouped_rows,
-        )
         inventory_print_html = app_module.render_template(
             "assistent_kamerlijst_print.html",
             grouped_rows=grouped_rows,
@@ -3082,12 +3084,151 @@ def test_inventory_and_scan_reports_render_effective_kanban_values(
             generated_at=datetime.datetime(2026, 8, 28, 12, 0),
         )
 
-    for html in (inventory_html, inventory_print_html, scan_html, scan_print_html):
+    for html in (inventory_print_html, scan_html, scan_print_html):
         assert "Min 3" in html
         assert "Aanv. 4" in html
         assert "Max" not in html
-    assert "Standaard" in inventory_html
     assert "Standaard" in inventory_print_html
+
+
+def test_bedrijfsbrede_kamerlijst_route_no_longer_exists(app_module):
+    """Ticket #17 AC1: het bedrijfsbrede Kamerlijst-overzicht is vervallen —
+    de oude URL bestaat niet meer (geen route, geen endpoint 'assistent_
+    kamerlijst').
+    """
+    response = app_module.app.test_client().get("/assistent/kamerlijst")
+    assert response.status_code == 404
+    assert "assistent_kamerlijst" not in [
+        rule.endpoint for rule in app_module.app.url_map.iter_rules()
+    ]
+
+
+def test_print_list_macros_see_the_calling_template_context(app_module):
+    """Regression (Standards review, ticket #17): the two print templates
+    import print_header/grouped_hierarchy without 'with context', so the
+    macro's own {{ huidig_bedrijf }} reference silently resolved to
+    Undefined (falsy — no error, just a missing logo) regardless of what
+    the route actually injected. Both imports now say 'with context'.
+    """
+    grouped_rows = [{
+        "naam": "Vestiging Noord",
+        "ruimte_types": [{
+            "naam": "Behandeling", "kleur_hex": "#123456",
+            "ruimtes": [{"naam": "Behandelkamer", "nummer": None, "kasten": [
+                {"naam": "Kast A", "type_opslag": "GRIJP", "inventory_rows": [], "scan_rows": []},
+            ]}],
+        }],
+    }]
+    room = SimpleNamespace(ruimte_id=9, naam="Behandelkamer", nummer=None)
+    company = SimpleNamespace(logo_url="https://example.test/logo.png")
+
+    with app_module.app.test_request_context("/"):
+        kamerlijst_html = app_module.render_template(
+            "assistent_kamerlijst_print.html",
+            grouped_rows=grouped_rows,
+            selected_room=room,
+            generated_at=datetime.datetime(2026, 8, 28, 12, 0),
+            huidig_bedrijf=company,
+        )
+        scanlijst_html = app_module.render_template(
+            "assistent_scanlijst_print.html",
+            grouped_rows=grouped_rows,
+            generated_at=datetime.datetime(2026, 8, 28, 12, 0),
+            huidig_bedrijf=company,
+        )
+
+    assert "https://example.test/logo.png" in kamerlijst_html
+    assert "https://example.test/logo.png" in scanlijst_html
+
+
+def test_kamerlijst_print_collapses_single_value_hierarchy_and_has_one_title_and_backlink(
+    app_module,
+):
+    """Ticket #17: Kamerlijst-print is altijd Ruimte-gescoopt, dus Vestiging
+    en Ruimtetype hebben voor de huidige selectie hoogstens één waarde — die
+    koppen mogen niet apart getoond worden. De titel staat precies één keer
+    op de pagina, en er is een zichtbare terugweg naar de Ruimte-pagina.
+    """
+    room = SimpleNamespace(ruimte_id=9, naam="Behandelkamer", nummer=None)
+    grouped_rows = [{
+        "naam": "Vestiging Noord",
+        "ruimte_types": [{
+            "naam": "Behandeling",
+            "kleur_hex": "#123456",
+            "ruimtes": [{
+                "naam": "Behandelkamer",
+                "nummer": None,
+                "kasten": [{
+                    "naam": "Kast A",
+                    "type_opslag": "GRIJP",
+                    "inventory_rows": [],
+                }],
+            }],
+        }],
+    }]
+
+    with app_module.app.test_request_context("/"):
+        html = app_module.render_template(
+            "assistent_kamerlijst_print.html",
+            grouped_rows=grouped_rows,
+            selected_room=room,
+            generated_at=datetime.datetime(2026, 8, 28, 12, 0),
+        )
+
+    assert html.count("<h1") == 1
+    assert "Vestiging Noord" not in html
+    assert "Behandeling" not in html
+    assert '<h3 class="h6 mb-2">' not in html
+    assert "Kast A" in html
+    assert '/assistent/kamer/9' in html
+
+
+def test_scanlijst_print_shows_multi_value_hierarchy_and_scan_count(app_module):
+    """Ticket #17: Scanlijst-print blijft bedrijfsbreed, dus hiërarchiekoppen
+    met méér dan één waarde blijven zichtbaar — en de Scans-kolom (die er
+    eerder ontbrak) toont hetzelfde aantal als de schermweergave.
+    """
+    kast_a = {
+        "naam": "Kast A", "type_opslag": "GRIJP",
+        "scan_rows": [(
+            SimpleNamespace(last_scanned_at=datetime.datetime(2026, 8, 28, 12, 0), scan_count=3),
+            SimpleNamespace(product_name="Verband", product_sku="7", human_code="KB-1234"),
+            SimpleNamespace(locatie_foto_url=None), SimpleNamespace(foto_url=None, verpakkingseenheid_tekst="doos"),
+            None, None, None, None, None, None,
+        )],
+    }
+    grouped_rows = [
+        {
+            "naam": "Vestiging Noord",
+            "ruimte_types": [{
+                "naam": "Behandeling", "kleur_hex": "#123456",
+                "ruimtes": [{"naam": "Kamer 1", "nummer": None, "kasten": [kast_a]}],
+            }],
+        },
+        {
+            "naam": "Vestiging Zuid",
+            "ruimte_types": [{
+                "naam": "Behandeling", "kleur_hex": "#123456",
+                "ruimtes": [{"naam": "Kamer 2", "nummer": None, "kasten": [kast_a]}],
+            }],
+        },
+    ]
+
+    with app_module.app.test_request_context("/"):
+        html = app_module.render_template(
+            "assistent_scanlijst_print.html",
+            grouped_rows=grouped_rows,
+            generated_at=datetime.datetime(2026, 8, 28, 12, 0),
+        )
+
+    assert html.count("<h1") == 1
+    # Twee Vestigingen: de hiërarchiekop blijft zichtbaar, ook al is het
+    # Ruimtetype daarbinnen steeds hetzelfde.
+    assert "Vestiging Noord" in html
+    assert "Vestiging Zuid" in html
+    assert ">Scans<" in html
+    assert ">3<" in html
+    assert '/assistent/scanlijst' in html
 
 
 def test_nieuwe_ruimte_rejects_missing_kamertype(app_module, monkeypatch):

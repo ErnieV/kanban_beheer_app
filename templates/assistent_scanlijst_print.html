@@ -1,5 +1,6 @@
 <!doctype html>
 {% from "_kanban_values.html" import render_kanban_values %}
+{% from "_print_list_layout.html" import print_header, grouped_hierarchy with context %}
 <html lang="nl">
 <head>
     <meta charset="utf-8">
@@ -19,86 +20,53 @@
 </head>
 <body class="bg-white">
     <div class="container py-4">
-        <div class="d-flex justify-content-between align-items-center mb-4 no-print">
-            <h1 class="h3 mb-0">Scanlijst</h1>
-            <button class="btn btn-primary" onclick="window.print()">Print</button>
-        </div>
-
-        <div class="d-flex align-items-center justify-content-between mb-4">
-            <div class="d-flex align-items-center gap-3">
-                {% if huidig_bedrijf and huidig_bedrijf.logo_url %}
-                    <img src="{{ huidig_bedrijf.logo_url }}" alt="Logo" style="max-height: 56px; max-width: 180px; object-fit: contain;">
-                {% endif %}
-                <div>
-                    <h1 class="h3 mb-1">Scanlijst</h1>
-                    <p class="text-muted mb-0">Uitgeprint op {{ generated_at|localdt }}</p>
-                </div>
-            </div>
-        </div>
+        {{ print_header('Scanlijst', 'Uitgeprint op ' ~ (generated_at|localdt), url_for('assistent_scanlijst')) }}
 
         {% if grouped_rows %}
-            {% for vestiging_group in grouped_rows %}
-            <section class="mb-4 section-break-avoid">
-                <h2 class="h5 border-bottom pb-2 mb-3">{{ vestiging_group.naam }}</h2>
-
-                {% for ruimte_type_group in vestiging_group.ruimte_types %}
-                <div class="mb-3">
-                    <div class="type-chip mb-2" style="background-color: {{ ruimte_type_group.kleur_hex }}20; border-left: 8px solid {{ ruimte_type_group.kleur_hex }};">
-                        {{ ruimte_type_group.naam }}
-                    </div>
-
-                    {% for ruimte_group in ruimte_type_group.ruimtes %}
-                    <div class="mb-3">
-                        <h3 class="h6 mb-2">{% if ruimte_group.nummer %}{{ ruimte_group.nummer }} - {% endif %}{{ ruimte_group.naam }}</h3>
-
-                        {% for kast_group in ruimte_group.kasten %}
-                        <div class="mb-3">
-                            <div class="d-flex justify-content-between align-items-center bg-light border px-3 py-2">
-                                <strong>{{ kast_group.naam }}</strong>
-                                {% if kast_group.type_opslag %}<span class="text-muted">{{ kast_group.type_opslag }}</span>{% endif %}
-                            </div>
-                            <table class="table table-bordered align-middle mb-0">
-                                <thead class="table-light">
-                                    <tr>
-                                        <th>Artikel</th>
-                                        <th>Kanban</th>
-                                        <th>Eenheid</th>
-                                        <th>Code</th>
-                                        <th>Laatst gescand</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for scan_item, kaart, positie, artikel, globaal, kast, ruimte, ruimte_type, bedrijf, vestiging in kast_group.scan_rows %}
-                                    {% set kanban = kanban_display_values(positie, artikel) %}
-                                    <tr>
-                                        <td>
-                                            {% set product_image = (positie.locatie_foto_url if positie and positie.locatie_foto_url else (artikel.foto_url if artikel and artikel.foto_url else (globaal.foto_url if globaal and globaal.foto_url else None))) %}
-                                            <div class="d-flex align-items-start gap-2">
-                                                {% if product_image %}
-                                                    <img src="{{ product_image }}" alt="Artikel" class="product-img">
-                                                {% endif %}
-                                                <div>
-                                                    <div><strong>{{ kaart.product_name }}</strong></div>
-                                                    <div class="text-muted">SKU: {{ kaart.product_sku or 'Geen SKU' }}</div>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td>{{ render_kanban_values(kanban) }}</td>
-                                        <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
-                                        <td class="font-monospace">{{ kaart.human_code }}</td>
-                                        <td>{{ scan_item.last_scanned_at|localdt }}</td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    {% endfor %}
+            {% call(kast_group) grouped_hierarchy(grouped_rows) %}
+            <div class="mb-3">
+                <div class="d-flex justify-content-between align-items-center bg-light border px-3 py-2">
+                    <strong>{{ kast_group.naam }}</strong>
+                    {% if kast_group.type_opslag %}<span class="text-muted">{{ kast_group.type_opslag }}</span>{% endif %}
                 </div>
-                {% endfor %}
-            </section>
-            {% endfor %}
+                <table class="table table-bordered align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Artikel</th>
+                            <th>Kanban</th>
+                            <th>Eenheid</th>
+                            <th>Code</th>
+                            <th>Laatst gescand</th>
+                            <th>Scans</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for scan_item, kaart, positie, artikel, globaal, kast, ruimte, ruimte_type, bedrijf, vestiging in kast_group.scan_rows %}
+                        {% set kanban = kanban_display_values(positie, artikel) %}
+                        <tr>
+                            <td>
+                                {% set product_image = (positie.locatie_foto_url if positie and positie.locatie_foto_url else (artikel.foto_url if artikel and artikel.foto_url else (globaal.foto_url if globaal and globaal.foto_url else None))) %}
+                                <div class="d-flex align-items-start gap-2">
+                                    {% if product_image %}
+                                        <img src="{{ product_image }}" alt="Artikel" class="product-img">
+                                    {% endif %}
+                                    <div>
+                                        <div><strong>{{ kaart.product_name }}</strong></div>
+                                        <div class="text-muted">SKU: {{ kaart.product_sku or 'Geen SKU' }}</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>{{ render_kanban_values(kanban) }}</td>
+                            <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
+                            <td class="font-monospace">{{ kaart.human_code }}</td>
+                            <td>{{ scan_item.last_scanned_at|localdt }}</td>
+                            <td><span class="badge bg-success">{{ scan_item.scan_count }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endcall %}
         {% else %}
             <div class="text-center text-muted py-4">Geen openstaande scans.</div>
         {% endif %}
