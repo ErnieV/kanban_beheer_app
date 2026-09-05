@@ -129,9 +129,9 @@
                                         </form>
 
                                         <!-- VERWIJDER KNOP -->
-                                        <form action="{{ url_for('verwijder_item', type='voorraad', id=pos.voorraad_positie_id) }}" method="POST" class="d-inline">
+                                        <form action="{{ url_for('verwijder_item', type='voorraad', id=pos.voorraad_positie_id) }}" method="POST" class="d-inline" data-confirm-delete="{{ lokaal.eigen_naam }} uit {{ kast.naam }} verwijderen?">
                                             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Verwijderen?')">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger">
                                                 <i class="bi bi-trash"></i>
                                             </button>
                                         </form>
@@ -150,8 +150,11 @@
                     <div class="col-auto">
                         <span class="form-text fw-bold">Artikel toevoegen:</span>
                     </div>
-                    <div class="col-md-4">
-                        <select name="artikel_id" class="form-select form-select-sm" required>
+                    <div class="col-md-3">
+                        <input type="text" class="form-control form-control-sm" placeholder="Zoek artikel op naam..." data-artikel-filter aria-label="Zoek artikel op naam">
+                    </div>
+                    <div class="col-md-3">
+                        <select name="artikel_id" class="form-select form-select-sm" required data-artikel-select>
                             <option value="" selected disabled>Kies artikel...</option>
                             {% for art in alle_artikelen %}
                                 <option value="{{ art.lokaal_artikel_id }}">
@@ -337,6 +340,34 @@
                     return;
                 }
                 saveRow(tr, fieldName);
+            });
+        });
+    });
+
+    // Ticket #16: verwijderbevestiging met context (artikelnaam +
+    // Opslaglocatie). De boodschap komt uit een data-attribuut in plaats
+    // van rechtstreeks in onclick="confirm('...')" te staan, zodat een
+    // artikelnaam met een apostrof de JS-string niet kan afbreken.
+    document.querySelectorAll('[data-confirm-delete]').forEach((form) => {
+        form.addEventListener('submit', (event) => {
+            if (!window.confirm(form.dataset.confirmDelete)) {
+                event.preventDefault();
+            }
+        });
+    });
+
+    // Ticket #16: artikel-toevoegen doorzoekbaar op naam. Filtert de
+    // bestaande <select> (die het artikel_id als waarde verstuurt) door
+    // niet-matchende <option>s te verbergen — geen aparte component nodig.
+    document.querySelectorAll('[data-artikel-filter]').forEach((filterInput) => {
+        const form = filterInput.closest('form');
+        const select = form ? form.querySelector('[data-artikel-select]') : null;
+        if (!select) return;
+        filterInput.addEventListener('input', () => {
+            const query = filterInput.value.trim().toLowerCase();
+            [...select.options].forEach((option) => {
+                if (!option.value) return; // placeholder-optie blijft altijd zichtbaar
+                option.hidden = query.length > 0 && !option.textContent.toLowerCase().includes(query);
             });
         });
     });

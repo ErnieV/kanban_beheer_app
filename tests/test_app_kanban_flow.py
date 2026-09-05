@@ -2994,6 +2994,12 @@ def test_room_page_renders_effective_kanban_values(
     assert 'value="3"' in html
     assert 'value="4"' in html
     assert "Max:" not in html
+    # Ticket #16: de verwijderbevestiging noemt artikelnaam én Opslaglocatie,
+    # niet alleen een generiek "Verwijderen?".
+    assert 'data-confirm-delete="Verband uit Kast A verwijderen?"' in html
+    # Ticket #16: artikel-toevoegen is doorzoekbaar op naam.
+    assert "data-artikel-filter" in html
+    assert "data-artikel-select" in html
 
 
 def test_inventory_and_scan_reports_render_effective_kanban_values(
