@@ -43,6 +43,8 @@
                     <tbody>
                         {% for scan_item, kaart, positie, artikel, globaal, kast, ruimte, ruimte_type, bedrijf, vestiging in kast_group.scan_rows %}
                         {% set kanban = kanban_display_values(positie, artikel) %}
+                        {% set product_display_name = kaart.product_name if kaart else ((artikel.eigen_naam if artikel and artikel.eigen_naam else None) or (globaal.generieke_naam if globaal else None) or 'Onbekend Artikel') %}
+                        {% set product_display_sku = kaart.product_sku if kaart else (artikel.lokaal_artikel_id if artikel else None) %}
                         <tr>
                             <td>
                                 {% set product_image = (positie.locatie_foto_url if positie and positie.locatie_foto_url else (artikel.foto_url if artikel and artikel.foto_url else (globaal.foto_url if globaal and globaal.foto_url else None))) %}
@@ -51,14 +53,14 @@
                                         <img src="{{ product_image }}" alt="Artikel" class="product-img">
                                     {% endif %}
                                     <div>
-                                        <div><strong>{{ kaart.product_name }}</strong></div>
-                                        <div class="text-muted">SKU: {{ kaart.product_sku or 'Geen SKU' }}</div>
+                                        <div><strong>{{ product_display_name }}</strong></div>
+                                        <div class="text-muted">SKU: {{ product_display_sku or 'Geen SKU' }}</div>
                                     </div>
                                 </div>
                             </td>
                             <td>{{ render_kanban_values(kanban) }}</td>
                             <td>{{ artikel.verpakkingseenheid_tekst if artikel and artikel.verpakkingseenheid_tekst else 'Stuk' }}</td>
-                            <td class="font-monospace">{{ kaart.human_code }}</td>
+                            <td class="font-monospace">{% if kaart %}{{ kaart.human_code }}{% else %}Locatiekaartje{% endif %}</td>
                             <td>{{ scan_item.last_scanned_at|localdt }}</td>
                             <td><span class="badge bg-success">{{ scan_item.scan_count }}</span></td>
                         </tr>

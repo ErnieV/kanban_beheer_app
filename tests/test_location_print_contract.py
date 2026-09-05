@@ -28,6 +28,8 @@ def _location_card_version(**overrides):
         opslaglocatie_naam="Kast A",
         kamertype_naam="Behandeling",
         kamertype_kleur="#123456",
+        qr_code_value="https://scan.example.test/scan/token-abc",
+        qr_human_readable="LK-ABCDEF12",
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -79,6 +81,10 @@ def test_location_card_contract_builds_a4_batch_without_layout_coordinates_or_ma
         "roomType": {
             "name": "Behandeling",
             "color": "#123456",
+        },
+        "trigger": {
+            "qrCodeValue": "https://scan.example.test/scan/token-abc",
+            "humanReadableCode": "LK-ABCDEF12",
         },
     }
     assert payload["cards"][1]["cardId"] == "2"

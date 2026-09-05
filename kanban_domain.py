@@ -131,6 +131,8 @@ class LocatiekaartInhoud:
     materiaaltype: Materiaaltype
     min_level: int | None
     refill_quantity: int | None
+    qr_code_value: str | None = None
+    qr_human_readable: str | None = None
 
     def __post_init__(self):
         material_type = normalize_material_type(self.materiaaltype)

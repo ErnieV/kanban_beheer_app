@@ -132,6 +132,8 @@ class LocatiekaartVersie(db.Model):
     kamertype_kleur = db.Column(db.String(20), nullable=True)
     materiaaltype = db.Column(db.String(20), nullable=False)
     min_level = db.Column(db.Integer, nullable=True)
+    qr_code_value = db.Column(db.String(512), nullable=True)
+    qr_human_readable = db.Column(db.String(64), nullable=True)
     status = db.Column(
         db.String(20),
         nullable=False,
@@ -147,7 +149,11 @@ class KanbanScanlijstItem(db.Model):
     __tablename__ = 'Kanban_Scanlijst_Item'
 
     scanlijst_item_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    kaart_id = db.Column(db.String(36), nullable=False, index=True)
+    # Ticket #36: precies één van kaart_id/voorraad_positie_id is gevuld —
+    # kaart_id voor een Kanban-kaartje-scan, voorraad_positie_id voor een
+    # Locatiekaartje-scan.
+    kaart_id = db.Column(db.String(36), nullable=True, index=True)
+    voorraad_positie_id = db.Column(db.Integer, nullable=True, index=True)
     bedrijf_id = db.Column(db.Integer, nullable=False, index=True)
     first_scanned_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     last_scanned_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
@@ -187,9 +193,22 @@ def ensure_kanban_settings_schema():
             'materiaaltype': 'NVARCHAR(20) NULL',
             'kanban_min_override': 'INTEGER NULL',
             'kanban_refill_quantity_override': 'INTEGER NULL',
+            # Ticket #36: permanent, positiegebonden scan-token voor het
+            # Locatiekaartje — onafhankelijk van enig Kanban-kaartje.
+            'locatie_scan_token': 'NVARCHAR(64) NULL',
         },
         'Print_Queue': {
             'refill_quantity': 'INTEGER NULL',
+        },
+        'Locatiekaart_Versie': {
+            'qr_code_value': 'NVARCHAR(512) NULL',
+            'qr_human_readable': 'NVARCHAR(64) NULL',
+        },
+        'Kanban_Scanlijst_Item': {
+            # Ticket #36: optionele, directe koppeling naar een
+            # Voorraadpositie, voor een scan die van een Locatiekaartje komt
+            # in plaats van van een Kanban-kaartje.
+            'voorraad_positie_id': 'INTEGER NULL',
         },
     }
 
@@ -205,6 +224,25 @@ def ensure_kanban_settings_schema():
                 continue
             db.session.execute(text(
                 f"ALTER TABLE [{table_name}] ADD [{column_name}] {column_definition}"
+            ))
+            changed = True
+
+    # Ticket #36: een Aanvullijst-regel kan voortaan via een Voorraadpositie
+    # zonder Kanban-kaartje ontstaan, dus de tot nu toe verplichte
+    # kaart_id-koppeling wordt optioneel. Idempotent: alleen uitvoeren als de
+    # kolom nog NOT NULL is.
+    if inspector.has_table('Kanban_Scanlijst_Item'):
+        kaart_id_column = next(
+            (
+                column for column in inspector.get_columns('Kanban_Scanlijst_Item')
+                if column['name'] == 'kaart_id'
+            ),
+            None,
+        )
+        if kaart_id_column is not None and not kaart_id_column['nullable']:
+            db.session.execute(text(
+                "ALTER TABLE [Kanban_Scanlijst_Item] ALTER COLUMN [kaart_id] "
+                "NVARCHAR(36) NULL"
             ))
             changed = True
 
@@ -408,6 +446,21 @@ def _generate_public_scan_url(public_token):
     return f"{base_url}/scan/{public_token}"
 
 
+def _ensure_locatie_scan_token(position):
+    """Ticket #36: een Voorraadpositie krijgt een permanent stabiel
+    scan-token voor het Locatiekaartje, onafhankelijk van enig Kanban-
+    kaartje voor diezelfde positie. Eenmaal gegenereerd verandert dit nooit
+    meer voor deze positie, ook niet als het Locatiekaartje zelf later
+    opnieuw wordt afgedrukt.
+    """
+    token = getattr(position, 'locatie_scan_token', None)
+    if token:
+        return token
+    token = secrets.token_urlsafe(32)
+    position.locatie_scan_token = token
+    return token
+
+
 def _get_reset_actor():
     return (
         request.headers.get('X-MS-CLIENT-PRINCIPAL-NAME')
@@ -585,6 +638,8 @@ def build_locatiekaart_content(
     if getattr(room, 'nummer', None):
         room_name = f"{room.nummer} {room_name}"
 
+    scan_token = _ensure_locatie_scan_token(position)
+
     return LocatiekaartInhoud(
         artikelnaam=(
             getattr(article, 'eigen_naam', None)
@@ -604,6 +659,8 @@ def build_locatiekaart_content(
         materiaaltype=_position_material_type(position),
         min_level=effective.min_level if effective else None,
         refill_quantity=effective.refill_quantity if effective else None,
+        qr_code_value=_generate_public_scan_url(scan_token),
+        qr_human_readable=f"LK-{scan_token[:8].upper()}",
     )
 
 
@@ -654,6 +711,12 @@ def create_or_reuse_locatiekaart_version(
             # success — put it back in the queue instead.
             version.status = LocatiekaartStatus.PENDING_PRINT.value
             version.printed_at = None
+        if not version.qr_code_value:
+            # Ticket #36: een versie die vóór dit ticket is aangemaakt heeft
+            # nog geen scan-QR. Bij hergebruik alsnog aanvullen, zonder de
+            # inhoud_hash (en dus de wijzig-detectie) aan te raken.
+            version.qr_code_value = content.qr_code_value
+            version.qr_human_readable = content.qr_human_readable
         return version, False
 
     _mark_locatiekaart_versions_superseded(active_versions)
@@ -672,6 +735,8 @@ def create_or_reuse_locatiekaart_version(
         kamertype_kleur=content.kamertype_kleur,
         materiaaltype=content.materiaaltype.value,
         min_level=content.min_level,
+        qr_code_value=content.qr_code_value,
+        qr_human_readable=content.qr_human_readable,
         status=LocatiekaartStatus.PENDING_PRINT.value,
         created_at=utcnow(),
     )
@@ -1515,6 +1580,10 @@ def build_location_cards_payload(versions, print_batch_id=None):
             "roomType": {
                 "name": getattr(version, 'kamertype_naam', None),
                 "color": getattr(version, 'kamertype_kleur', None),
+            },
+            "trigger": {
+                "qrCodeValue": getattr(version, 'qr_code_value', None) or "",
+                "humanReadableCode": getattr(version, 'qr_human_readable', None) or "",
             },
         }
         if material_type is Materiaaltype.KANBAN and getattr(
@@ -2443,6 +2512,16 @@ def api_preview_layout():
 
 
 def _get_open_scan_rows(bedrijf_id):
+    """Ticket #36: een regel komt óf van een Kanban-kaartje-scan (via
+    kaart_id) óf van een Locatiekaartje-scan (rechtstreeks via
+    voorraad_positie_id op KanbanScanlijstItem) — nooit beide. De
+    KanbanKaart-join wordt daarom een outerjoin, en de Voorraad_Positie-join
+    gebruikt welke van de twee bronnen aanwezig is.
+    """
+    resolved_position_id = func.coalesce(
+        KanbanKaart.voorraad_positie_id,
+        KanbanScanlijstItem.voorraad_positie_id,
+    )
     return db.session.query(
         KanbanScanlijstItem,
         KanbanKaart,
@@ -2454,10 +2533,10 @@ def _get_open_scan_rows(bedrijf_id):
         Ruimte_Type,
         Bedrijf,
         Vestiging
-    ).join(
+    ).outerjoin(
         KanbanKaart, KanbanScanlijstItem.kaart_id == KanbanKaart.kaart_id
     ).outerjoin(
-        Voorraad_Positie, KanbanKaart.voorraad_positie_id == Voorraad_Positie.voorraad_positie_id
+        Voorraad_Positie, resolved_position_id == Voorraad_Positie.voorraad_positie_id
     ).outerjoin(
         Lokaal_Artikel, Voorraad_Positie.lokaal_artikel_id == Lokaal_Artikel.lokaal_artikel_id
     ).outerjoin(
@@ -2471,11 +2550,11 @@ def _get_open_scan_rows(bedrijf_id):
     ).outerjoin(
         Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id
     ).outerjoin(
-        Bedrijf, KanbanKaart.bedrijf_id == Bedrijf.bedrijf_id
+        Bedrijf, KanbanScanlijstItem.bedrijf_id == Bedrijf.bedrijf_id
     ).filter(
         KanbanScanlijstItem.bedrijf_id == bedrijf_id,
         KanbanScanlijstItem.reset_at.is_(None),
-        KanbanKaart.status != 'SUPERSEDED',
+        or_(KanbanKaart.kaart_id.is_(None), KanbanKaart.status != 'SUPERSEDED'),
     ).order_by(KanbanScanlijstItem.last_scanned_at.desc()).all()
 
 

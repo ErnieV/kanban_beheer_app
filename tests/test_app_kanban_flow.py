@@ -3858,6 +3858,85 @@ def test_kamerlijst_print_collapses_single_value_hierarchy_and_has_one_title_and
     assert '/assistent/kamer/9' in html
 
 
+def test_assistent_scanlijst_shows_kanban_and_locatiekaartje_scans_together(
+    app_module, monkeypatch
+):
+    """Ticket #36: een Kanban-kaartje-afkomstige scan en twee
+    Locatiekaartje-afkomstige scans (geen Kanban_Kaart-rij) staan naast
+    elkaar op de Aanvullijst/Scanlijst. Elke Locatiekaartje-regel toont het
+    Artikel via Voorraad_Positie/Lokaal_Artikel en geen kaartcode — maar
+    Min/Aanvulhoeveelheid blijft (net als altijd) puur afhankelijk van het
+    materiaaltype van de positie zelf, niet van of er een Kanban-kaartje
+    bestaat: een Locatiekaartje-scan van een Kanban-materiaal-positie toont
+    dus wél de echte Min/Aanv., en alleen Standaard materiaal toont geen
+    van beide.
+    """
+    kast = SimpleNamespace(kast_id=12, naam="1e lade linksonder", type_opslag="GRIJP")
+    ruimte = SimpleNamespace(ruimte_id=2, naam="Behandelkamer", nummer="113")
+    ruimte_type = SimpleNamespace(ruimte_type_id=1, naam="Behandeling", kleur_hex="#123456")
+    vestiging = SimpleNamespace(vestiging_id=1, naam="Hoofdvestiging")
+    bedrijf = SimpleNamespace(naam="Vivaldi")
+
+    kanban_row = (
+        SimpleNamespace(
+            last_scanned_at=datetime.datetime(2026, 9, 5, 9, 0), scan_count=1,
+        ),
+        SimpleNamespace(product_name="Verband", product_sku="7", human_code="KB-1234"),
+        SimpleNamespace(locatie_foto_url=None),
+        SimpleNamespace(eigen_naam="Verband", foto_url=None, verpakkingseenheid_tekst="doos"),
+        None, kast, ruimte, ruimte_type, bedrijf, vestiging,
+    )
+    locatiekaartje_kanban_row = (
+        SimpleNamespace(
+            last_scanned_at=datetime.datetime(2026, 9, 5, 9, 5), scan_count=1,
+        ),
+        None,  # geen Kanban_Kaart voor deze scan
+        SimpleNamespace(locatie_foto_url=None, materiaaltype="KANBAN"),
+        SimpleNamespace(
+            eigen_naam="Naaldencontainer", lokaal_artikel_id=42,
+            foto_url=None, verpakkingseenheid_tekst="stuk",
+            kanban_min=3, kanban_refill_quantity=4,
+        ),
+        None, kast, ruimte, ruimte_type, bedrijf, vestiging,
+    )
+    locatiekaartje_standaard_row = (
+        SimpleNamespace(
+            last_scanned_at=datetime.datetime(2026, 9, 5, 9, 10), scan_count=1,
+        ),
+        None,  # geen Kanban_Kaart voor deze scan
+        SimpleNamespace(locatie_foto_url=None, materiaaltype="STANDAARD"),
+        SimpleNamespace(
+            eigen_naam="Onderlegger", lokaal_artikel_id=43,
+            foto_url=None, verpakkingseenheid_tekst="stuk",
+        ),
+        None, kast, ruimte, ruimte_type, bedrijf, vestiging,
+    )
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "_get_open_scan_rows",
+        lambda bedrijf_id: [
+            kanban_row, locatiekaartje_kanban_row, locatiekaartje_standaard_row,
+        ],
+    )
+
+    response = app_module.app.test_client().get("/assistent/scanlijst")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Verband" in html
+    assert "KB-1234" in html
+    assert html.count("Locatiekaartje") == 2  # beide kaart-loze regels
+    assert "Naaldencontainer" in html
+    assert "Min 3" in html and "Aanv. 4" in html  # Kanban-materiaal: wél getoond
+    assert "Onderlegger" in html
+    onderlegger_pos = html.index("Onderlegger")
+    volgende_rij = html.index("</tr>", onderlegger_pos)
+    assert "Standaard" in html[onderlegger_pos:volgende_rij]  # geen Min/Aanv.
+
+
 def test_scanlijst_print_shows_multi_value_hierarchy_and_scan_count(app_module):
     """Ticket #17: Scanlijst-print blijft bedrijfsbreed, dus hiërarchiekoppen
     met méér dan één waarde blijven zichtbaar — en de Scans-kolom (die er

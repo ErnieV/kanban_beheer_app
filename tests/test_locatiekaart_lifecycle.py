@@ -113,6 +113,38 @@ def test_standard_location_card_content_has_no_kanban_values(app_module):
     assert content.refill_quantity is None
 
 
+def test_location_card_content_includes_stable_scan_qr_fields(app_module):
+    """Ticket #36: build_locatiekaart_content geeft een scan-QR-waarde en
+    een korte leesbare code mee, onafhankelijk van enig Kanban-kaartje.
+    """
+    position, article, global_item, storage_location, room, room_type, company, branch = (
+        _source_objects()
+    )
+
+    content = app_module.build_locatiekaart_content(
+        position, article, global_item, storage_location, room, room_type, company, branch,
+    )
+
+    assert content.qr_code_value
+    assert position.locatie_scan_token in content.qr_code_value
+    assert content.qr_human_readable.startswith("LK-")
+    assert len(content.qr_human_readable) == 11
+
+
+def test_ensure_locatie_scan_token_generates_once_and_stays_stable(app_module):
+    """Ticket #36: het token wordt lui aangemaakt en blijft daarna gelijk
+    voor dezelfde Voorraadpositie, ook over meerdere aanroepen heen.
+    """
+    position = SimpleNamespace(voorraad_positie_id=91)
+
+    first = app_module._ensure_locatie_scan_token(position)
+    second = app_module._ensure_locatie_scan_token(position)
+
+    assert first
+    assert first == second
+    assert position.locatie_scan_token == first
+
+
 def test_location_card_version_reuses_unchanged_content_and_supersedes_changed_content(
     app_module,
 ):
