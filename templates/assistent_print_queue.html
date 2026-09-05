@@ -7,34 +7,7 @@
     </a>
 </div>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h2><i class="bi bi-printer"></i> Printopdrachten</h2>
-    <form action="{{ url_for('test_print_verbinding') }}" method="POST" class="d-inline">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-sm btn-outline-secondary" title="Check poort en service endpoint">
-            <i class="bi bi-wifi"></i> Test verbinding
-        </button>
-    </form>
-</div>
-
-<div class="alert alert-light border small">
-    <strong>Printservice:</strong>
-    {% if print_service_url %}
-        <span class="font-monospace">{{ print_service_url }}</span>
-    {% else %}
-        <span class="text-danger">Niet geconfigureerd. Zet <code>PRINT_SERVICE_URL</code> in de app settings.</span>
-    {% endif %}
-</div>
-
-{% if preview_layout_error %}
-<div class="alert alert-danger small">
-    <strong>Preview layout:</strong> {{ preview_layout_error }}
-</div>
-{% elif preview_layout_warning %}
-<div class="alert alert-warning small">
-    <strong>Preview layout:</strong> {{ preview_layout_warning }}
-</div>
-{% endif %}
+<h2 class="mb-3"><i class="bi bi-printer"></i> Printopdrachten</h2>
 
 <!-- ============================= KANBAN-KAARTJES ============================= -->
 <form id="kanbanSelectieForm" action="{{ url_for('verstuur_selectie_print_opdrachten') }}" method="POST">
@@ -55,13 +28,13 @@
             </button>
             <button type="submit" form="kanbanSelectieForm" class="btn btn-sm btn-outline-success"
                     data-verstuur-selectie disabled>
-                Verstuur geselecteerde
+                Geselecteerde naar printer sturen
             </button>
             <form action="{{ url_for('verstuur_alle_print_opdrachten') }}" method="POST" class="d-inline"
                   data-verstuur-alles-form>
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-success" {% if not queue_rows %}disabled{% endif %}>
-                    <i class="bi bi-send-check"></i> Alles versturen
+                    <i class="bi bi-send-check"></i> Alle openstaande naar printer sturen
                 </button>
             </form>
         </div>
@@ -74,11 +47,10 @@
                     <thead class="table-light">
                         <tr>
                             <th style="width: 3%;"></th>
-                            <th style="width: 18%;">Locatie & Header</th>
-                            <th style="width: 23%;">Artikel</th>
-                            <th style="width: 10%;">Logistiek</th>
-                            <th style="width: 14%;" class="text-center">QR Code</th>
-                            <th style="width: 10%;">Status</th>
+                            <th style="width: 20%;">Ruimte &amp; Opslaglocatie</th>
+                            <th style="width: 27%;">Artikel</th>
+                            <th style="width: 15%;">Min / Aanv.</th>
+                            <th style="width: 18%;">Tijdstip &amp; status</th>
                             <th style="width: 100px;" class="text-end">Acties</th>
                         </tr>
                     </thead>
@@ -95,18 +67,10 @@
                                        {% if kaart_verouderd %}disabled{% endif %}
                                        aria-label="Selecteer dit Kanban-kaartje">
                             </td>
-                            <!-- HEADER INFO & LOGO -->
+                            <!-- RUIMTE & OPSLAGLOCATIE -->
                             <td>
-                                <div class="p-2 mb-2 text-center text-white fw-bold text-uppercase rounded shadow-sm"
-                                     style="background-color: {{ item.header_color|default('#333') }}; font-size: 0.85rem;">
-                                    {{ item.header_text }}
-                                </div>
-                                {% if item.company_logo_url %}
-                                    <div class="text-center">
-                                        <img src="{{ item.company_logo_url }}" alt="Logo" style="max-height: 25px; opacity: 0.8;">
-                                    </div>
-                                {% endif %}
-                                <div class="text-muted small text-center mt-1">{{ item.location_text }}</div>
+                                <div>{{ item.header_text|title }}</div>
+                                <div class="text-muted small">{{ item.location_text }}</div>
                             </td>
 
                             <!-- ARTIKEL -->
@@ -123,13 +87,12 @@
                                     </div>
                                     <div>
                                         <strong>{{ item.product_name }}</strong><br>
-                                        <span class="text-muted">{{ item.product_packaging }}</span><br>
-                                        <small class="text-dark font-monospace">{{ item.product_sku }}</small>
+                                        <span class="text-muted">{{ item.product_packaging }}</span>
                                     </div>
                                 </div>
                             </td>
 
-                            <!-- LOGISTIEK -->
+                            <!-- MIN / AANV. -->
                             <td>
                                 <div class="d-flex flex-column gap-1">
                                     {% if kaart_verouderd %}
@@ -143,18 +106,7 @@
                                 </div>
                             </td>
 
-                            <!-- QR CODE PREVIEW -->
-                            <td class="text-center bg-white">
-                                {% if item.qr_code_value and 'http' in item.qr_code_value %}
-                                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&data={{ item.qr_code_value }}"
-                                         alt="QR" class="img-fluid" style="width: 60px; height: 60px;">
-                                {% else %}
-                                    <i class="bi bi-qr-code text-muted" style="font-size: 2rem;"></i>
-                                {% endif %}
-                                <div class="font-monospace fw-bold small mt-1" style="font-size: 0.7rem;">{{ item.qr_human_readable }}</div>
-                            </td>
-
-                            <!-- STATUS -->
+                            <!-- TIJDSTIP & STATUS -->
                             <td>
                                 <div class="small text-muted mb-1">{{ item.aangemaakt_op.strftime('%d-%m %H:%M') }}</div>
                                 {% if item.status == 'PENDING' %}
@@ -169,8 +121,8 @@
                                 <div class="btn-group-vertical btn-group-sm w-100">
                                     <form action="{{ url_for('verstuur_print_opdracht', print_id=item.print_id) }}" method="POST" class="mb-1">
                                         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="btn btn-success w-100" title="Stuur direct naar lokale printer" {% if kaart_verouderd %}disabled{% endif %}>
-                                            <i class="bi bi-send"></i> Print
+                                        <button type="submit" class="btn btn-success w-100" title="Naar printer sturen" {% if kaart_verouderd %}disabled{% endif %}>
+                                            <i class="bi bi-send"></i> Naar printer sturen
                                         </button>
                                     </form>
 
@@ -204,7 +156,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="7" class="text-center py-5 text-muted">
+                            <td colspan="6" class="text-center py-5 text-muted">
                                 <i class="bi bi-inbox fs-1 d-block mb-2"></i>
                                 Geen openstaande Kanban-kaartjes.
                             </td>
@@ -236,13 +188,13 @@
             </button>
             <button type="submit" form="locatiekaartSelectieForm" class="btn btn-sm btn-outline-success"
                     data-verstuur-selectie disabled>
-                Verstuur geselecteerde
+                Geselecteerde naar printer sturen
             </button>
             <form action="{{ url_for('locatiekaart_verstuur_alles') }}" method="POST" class="d-inline"
                   data-verstuur-alles-form>
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-success" {% if not locatiekaart_versions %}disabled{% endif %}>
-                    <i class="bi bi-send-check"></i> Alles versturen
+                    <i class="bi bi-send-check"></i> Alle openstaande naar printer sturen
                 </button>
             </form>
         </div>
@@ -255,7 +207,7 @@
                     <thead class="table-light">
                         <tr>
                             <th style="width: 3%;"></th>
-                            <th style="width: 22%;">Ruimte & Opslaglocatie</th>
+                            <th style="width: 22%;">Ruimte &amp; Opslaglocatie</th>
                             <th style="width: 30%;">Artikel</th>
                             <th style="width: 15%;">Status</th>
                             <th style="width: 120px;" class="text-end">Acties</th>
@@ -310,7 +262,7 @@
                                           onsubmit="return confirm('Dit drukt een heel A4-vel met 8 vakjes, waarvan er hier maar 1 gebruikt wordt — de rest blijft leeg. Doorgaan?');">
                                         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                         <button type="submit" class="btn btn-success w-100" title="Stuur dit ene kaartje (kost een heel A4-vel)">
-                                            <i class="bi bi-send"></i> Print
+                                            <i class="bi bi-send"></i> Naar printer sturen
                                         </button>
                                     </form>
                                     <form action="{{ url_for('locatiekaart_annuleren', locatiekaart_versie_id=version.locatiekaart_versie_id) }}"
@@ -363,7 +315,7 @@
 </div>
 
 <script>
-    // ============ Selectie: alles/niets, "Verstuur geselecteerde" state, bevestiging met inhoud ============
+    // ============ Selectie: alles/niets, "Geselecteerde naar printer sturen" state (incl. live aantal), bevestiging met inhoud ============
     document.querySelectorAll('[data-section]').forEach((section) => {
         const checkboxes = [...section.querySelectorAll('.select-row')];
         const selectable = checkboxes.filter((cb) => !cb.disabled);
@@ -375,6 +327,12 @@
             const checked = selectable.filter((cb) => cb.checked);
             if (verstuurSelectieBtn) {
                 verstuurSelectieBtn.disabled = checked.length === 0;
+                // Ticket #27/#29: de knoptekst zelf noemt het actuele aantal
+                // geselecteerde kaartjes, zodat de omvang van de actie
+                // vooraf duidelijk is — niet pas in de bevestiging.
+                verstuurSelectieBtn.textContent = checked.length > 0
+                    ? `${checked.length} geselecteerde naar printer sturen`
+                    : 'Geselecteerde naar printer sturen';
             }
             if (toggleAllBtn) {
                 const allChecked = selectable.length > 0 && checked.length === selectable.length;
@@ -437,6 +395,9 @@
     });
 
     // ============ Kanban-kaartje voorbeeld (structured layout preview) ============
+    // Ticket #29: dit blijft een optionele controleactie — de layoutconfig
+    // wordt uitsluitend op aanvraag (klik op "Voorbeeld") opgehaald, nooit
+    // vooraf bij het laden van de pagina.
     const previewState = {
         layout: null,
         modal: null
@@ -865,9 +826,5 @@
         }
         previewState.modal.show();
     }
-
-    document.addEventListener('DOMContentLoaded', () => {
-        loadPreviewLayout(false).catch(() => null);
-    });
 </script>
 {% endblock %}

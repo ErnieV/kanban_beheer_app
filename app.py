@@ -2370,11 +2370,15 @@ def kanban_aanvragen_enkel(voorraad_positie_id):
 
 @app.route('/assistent/print-queue')
 def assistent_print_queue():
+    """Ticket #29: een rustige assistententaaklijst — geen printservice-URL,
+    omgevingsvariabele of preview-layoutdiagnose, en geen eager
+    preview-layout-aanroep op een gewone paginalaad. De optionele
+    kaartvoorbeeld-actie ('Voorbeeld') haalt de layoutconfig zelf pas op
+    wanneer een assistente er daadwerkelijk op klikt, via /api/preview-layout.
+    """
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
-    preview_layout_warning = None
-    preview_layout_error = None
-    
+
     queue_items = db.session.query(Print_Queue)\
         .filter(Print_Queue.bedrijf_id == bedrijf_id, Print_Queue.status == 'PENDING')\
         .order_by(Print_Queue.aangemaakt_op.desc()).all()
@@ -2390,23 +2394,11 @@ def assistent_print_queue():
 
     locatiekaart_versions = _get_pending_locatiekaart_versions(bedrijf_id)
 
-    try:
-        _, stale_layout, layout_warning = get_preview_layout()
-        if stale_layout:
-            preview_layout_warning = layout_warning
-        elif layout_warning:
-            preview_layout_warning = layout_warning
-    except RuntimeError as exc:
-        preview_layout_error = str(exc)
-
     return render_template(
         'assistent_print_queue.html',
         queue_items=queue_items,
         queue_rows=queue_rows,
         locatiekaart_versions=locatiekaart_versions,
-        print_service_url=PRINT_SERVICE_URL,
-        preview_layout_warning=preview_layout_warning,
-        preview_layout_error=preview_layout_error
     )
 
 @app.route('/api/preview-layout')
@@ -2666,6 +2658,11 @@ def assistent_kamerlijst_print(ruimte_id):
 
 @app.route('/assistent/print-queue/test-verbinding', methods=['POST'])
 def test_print_verbinding():
+    """Ticket #29: geen template linkt hier meer naartoe — de handmatige
+    verbindingstest hoort niet meer bij de assistentenflow. De route blijft
+    bestaan voor een toekomstig, apart beheerdiagnosescherm (expliciet
+    buiten scope van #27/#29), niet omdat hij nog ergens aan hangt.
+    """
     if not check_db():
         return redirect(url_for('dashboard'))
     ok, detail = test_print_service_connectivity()

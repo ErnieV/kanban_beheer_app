@@ -2680,7 +2680,6 @@ def test_print_queue_view_renders_both_kanban_and_locatiekaart_sections(
 
     monkeypatch.setattr(app_module, "check_db", lambda: True)
     monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_preview_layout", lambda: ({}, False, None))
     monkeypatch.setattr(
         app_module,
         "Print_Queue",
@@ -2708,6 +2707,85 @@ def test_print_queue_view_renders_both_kanban_and_locatiekaart_sections(
     # AC-vereiste 'doelprinter' kunnen tonen (spec-review fix, ticket #26).
     assert 'data-printer-label="Badgy 200-printer"' in html
     assert 'data-printer-label="A4-kleurenprinter"' in html
+    # Ticket #29: rustige takenlijst — taakgegevens zichtbaar, technische
+    # diagnose en identificatoren niet. (De inline preview-<script> mag QR-
+    # en SKU-gerelateerde code bevatten — die specifieke woorden dus niet
+    # als blanket-substring-check over de hele pagina, maar de zichtbare
+    # kolomkop/opmaak die alleen in de rij zelf voorkwam wel.)
+    # "Min / Aanv." is uniek voor de Kanban-tabel (de Locatiekaart-tabel had
+    # nooit een Logistiek-kolom), dus dit controleert specifiek dát de
+    # Kanban-kolommen zijn herzien — niet alleen dat "Ruimte"/"Opslaglocatie"
+    # ergens op de pagina voorkomt (dat gold al vóór dit ticket voor de
+    # Locatiekaart-sectie).
+    assert "Min / Aanv." in html
+    assert "Logistiek" not in html
+    assert "Locatie &amp; Header" not in html
+    assert "Naar printer sturen" in html
+    assert "PRINT_SERVICE_URL" not in html
+    assert "Printservice:" not in html
+    assert "Test verbinding" not in html
+    assert "Preview layout" not in html
+    assert "QR Code</th>" not in html
+    assert 'text-dark font-monospace"' not in html
+    # De ruwe, hoofdletter-header_text ("KAMER") wordt in de zichtbare
+    # Ruimte-kolom leesbaar getoond, niet in SCHREEUWHOOFDLETTERS — al blijft
+    # de rauwe waarde nog steeds als data-header op de Voorbeeld-knop staan,
+    # want die moet exact tonen wat er op het fysieke kaartje komt.
+    assert "<div>Kamer</div>" in html
+    assert "<div>KAMER</div>" not in html
+
+
+def test_print_queue_get_does_not_call_connectivity_test_or_preview_layout(
+    app_module, monkeypatch
+):
+    """Ticket #29: 'Een gewone paginalaad van Printopdrachten voert geen
+    externe diagnose- of preview-layoutaanroep uit.' Beide helpers slaan
+    hun aanroep op; als de route ze toch aanriep, zou deze test dat vangen.
+    """
+    calls = []
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+        def desc(self):
+            return self
+
+    class EmptyQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return []
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "get_preview_layout",
+        lambda *a, **k: calls.append("get_preview_layout"),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "test_print_service_connectivity",
+        lambda *a, **k: calls.append("test_print_service_connectivity"),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Print_Queue",
+        SimpleNamespace(bedrijf_id=FakeField(), status=FakeField(), aangemaakt_op=FakeField()),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(
+        session=SimpleNamespace(query=lambda *a, **k: EmptyQuery())
+    ))
+
+    response = app_module.app.test_client().get("/assistent/print-queue")
+
+    assert response.status_code == 200
+    assert calls == []
 
 
 def test_superseded_queue_item_is_not_sent_to_print_service(
@@ -2771,7 +2849,6 @@ def test_print_queue_view_uses_effective_min_and_refill_without_max(
 
     monkeypatch.setattr(app_module, "check_db", lambda: True)
     monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_preview_layout", lambda: ({}, False, None))
 
     class FakeField:
         def __eq__(self, other):
@@ -2905,7 +2982,6 @@ def test_print_queue_view_precomputes_linked_card_settings(
 
     monkeypatch.setattr(app_module, "check_db", lambda: True)
     monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_preview_layout", lambda: ({}, False, None))
     monkeypatch.setattr(
         app_module,
         "Print_Queue",
@@ -3496,7 +3572,6 @@ def test_print_queue_cancel_uses_one_consistent_verb(app_module, monkeypatch):
 
     monkeypatch.setattr(app_module, "check_db", lambda: True)
     monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
-    monkeypatch.setattr(app_module, "get_preview_layout", lambda: ({}, False, None))
     monkeypatch.setattr(
         app_module,
         "Print_Queue",
