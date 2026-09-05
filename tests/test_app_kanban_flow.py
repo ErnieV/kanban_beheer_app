@@ -3103,6 +3103,105 @@ def test_bedrijfsbrede_kamerlijst_route_no_longer_exists(app_module):
     ]
 
 
+def test_artikelen_beheer_page_has_search_catalog_first_and_readable_actions(
+    app_module, monkeypatch
+):
+    """Ticket #18: zoekveld voor het lokale assortiment, 'Zoek artikel in
+    catalogus' als primaire actie i.p.v. 'Nieuw Artikel Maken', tekstuele
+    acties i.p.v. iconen, en 'Global'/'Lokaal' vervangen door gewone taal.
+    """
+    global_item = SimpleNamespace(
+        global_id=1, generieke_naam="Catalogusverband", foto_url=None,
+        categorie=None, ean_code=None,
+    )
+    linked_article = SimpleNamespace(
+        lokaal_artikel_id=1, eigen_naam="Catalogusverband",
+        foto_url=None, verpakkingseenheid_tekst="doos",
+        kanban_min=3, kanban_refill_quantity=4,
+    )
+    local_article = SimpleNamespace(
+        lokaal_artikel_id=2, eigen_naam="Eigen Verbandset",
+        foto_url=None, verpakkingseenheid_tekst="stuks",
+        kanban_min=1, kanban_refill_quantity=1,
+    )
+    raw_results = [(linked_article, global_item), (local_article, None)]
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+        def isnot(self, other):
+            return self
+
+        def notin_(self, other):
+            return self
+
+    class Query:
+        def __init__(self, result):
+            self.result = result
+
+        def outerjoin(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return self.result
+
+    class FakeSession:
+        def query(self, *models):
+            if len(models) == 2:
+                return Query(raw_results)
+            if models and models[0] is app_module.Global_Catalogus:
+                return Query([])
+            return Query([])
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "Lokaal_Artikel",
+        SimpleNamespace(
+            bedrijf_id=FakeField(), global_id=FakeField(), eigen_naam=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module, "Global_Catalogus", SimpleNamespace(global_id=FakeField())
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = app_module.app.test_client().get("/artikelen-beheer")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+
+    # Zoekveld voor het lokale assortiment.
+    assert "data-assortiment-filter" in html
+    assert 'data-artikel-naam="catalogusverband"' in html
+    assert 'data-artikel-naam="eigen verbandset"' in html
+
+    # 'Zoek artikel in catalogus' primair, 'Nieuw artikel maken' secundair.
+    zoek_index = html.index("Zoek artikel in catalogus")
+    nieuw_index = html.index("Nieuw artikel maken")
+    assert "btn-primary" in html[zoek_index - 200:zoek_index]
+    assert "btn-success" not in html[nieuw_index - 200:nieuw_index]
+
+    # Tekstuele acties i.p.v. alleen iconen.
+    assert "Locaties bekijken" in html
+    assert "Bewerken" in html
+    assert "Samenvoegen met catalogus" in html
+    assert "Verwijderen" in html
+
+    # 'Global'/'Lokaal' vervangen door gewone taal.
+    assert "Eigen artikel" in html
+    assert ">Lokaal<" not in html
+    assert "Global" not in html
+
+
 def test_print_list_macros_see_the_calling_template_context(app_module):
     """Regression (Standards review, ticket #17): the two print templates
     import print_header/grouped_hierarchy without 'with context', so the
