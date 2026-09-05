@@ -7,7 +7,7 @@
 </div>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2>Infrastructuur Beheer</h2>
+    <h2>Ruimtes & Opslaglocaties</h2>
     <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#settingsPanel">
         <i class="bi bi-palette"></i> Ruimte Types & Kleuren
     </button>
@@ -209,25 +209,25 @@
         {% endif %}
     </div>
 
-    <!-- 3. KASTEN -->
+    <!-- 3. OPSLAGLOCATIES -->
     <div class="col-md-4">
         {% if active_ruimte_id %}
         <div class="card shadow-sm border-0 h-100">
             <div class="card-header bg-white fw-bold border-bottom-0 py-3 d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-archive me-2 text-primary"></i>3. Kasten</span>
+                <span><i class="bi bi-archive me-2 text-primary"></i>3. Opslaglocaties</span>
                 <span class="badge bg-light text-dark">{{ kasten|length }}</span>
             </div>
             <div class="card-body bg-light-subtle">
-                <!-- Nieuwe Kast -->
+                <!-- Nieuwe Opslaglocatie -->
                 <form action="{{ url_for('beheer_infra') }}" method="POST" class="mb-4">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="actie" value="nieuwe_kast">
                     <input type="hidden" name="ruimte_id" value="{{ active_ruimte_id }}">
                     <!-- Behoud vestiging ID voor redirect -->
                     <input type="hidden" name="vestiging_id" value="{{ active_vestiging_id }}">
-                    
+
                     <div class="input-group input-group-sm mb-2">
-                        <input type="text" name="naam" class="form-control" placeholder="Naam Kast" required>
+                        <input type="text" name="naam" class="form-control" placeholder="Naam Opslaglocatie" required>
                     </div>
                     <select name="type_opslag" class="form-select form-select-sm mb-2">
                         <option value="GRIJP">Grijpvoorraad</option>
@@ -241,8 +241,8 @@
                     {% for kast in kasten %}
                     <div class="list-group-item d-flex justify-content-between align-items-center p-2">
                         <div class="text-truncate me-2">
-                            <strong>{{ kast.naam }}</strong> 
-                            <span class="badge bg-light text-dark border ms-1" style="font-size: 0.65rem;">{{ kast.type_opslag }}</span>
+                            <strong>{{ kast.naam }}</strong>
+                            <span class="badge bg-light text-dark border ms-1" style="font-size: 0.65rem;">{{ display_opslagtype(kast.type_opslag) }}</span>
                         </div>
                         <div class="d-flex gap-1">
                             <button class="btn btn-sm btn-outline-secondary py-0 px-1" 
@@ -285,7 +285,7 @@
 </div><div class="modal-footer"><button type="submit" class="btn btn-primary">Opslaan</button></div></form></div></div></div>
 
 <div class="modal fade" id="editKastModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form id="editKastForm" method="POST">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="modal-header"><h5 class="modal-title">Kast Bewerken</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Naam</label><input type="text" name="naam" id="editKastNaam" class="form-control" required></div><div class="mb-3"><label class="form-label">Type Opslag</label><select name="type_opslag" id="editKastType" class="form-select"><option value="GRIJP">Grijpvoorraad</option><option value="BULK">Bulkvoorraad</option></select></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Opslaan</button></div></form></div></div></div>
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="modal-header"><h5 class="modal-title">Opslaglocatie Bewerken</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Naam</label><input type="text" name="naam" id="editKastNaam" class="form-control" required></div><div class="mb-3"><label class="form-label">Type Opslag</label><select name="type_opslag" id="editKastType" class="form-select"><option value="GRIJP">Grijpvoorraad</option><option value="BULK">Bulkvoorraad</option></select></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Opslaan</button></div></form></div></div></div>
 
 <script>
     var editVestigingModal = document.getElementById('editVestigingModal')

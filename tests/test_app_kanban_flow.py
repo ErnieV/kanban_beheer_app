@@ -752,7 +752,7 @@ def test_location_print_selection_creates_only_selected_location_versions(
     with client.session_transaction() as session:
         flashes = session.get("_flashes", [])
     flash_messages = " ".join(message for _, message in flashes)
-    assert "1 Locatiekaartje klaargezet in de printwachtrij." in flash_messages
+    assert "1 Locatiekaartje klaargezet bij de printopdrachten." in flash_messages
 
 
 @pytest.mark.parametrize(
@@ -1223,7 +1223,7 @@ def test_room_location_print_selection_processes_selected_standard_and_kanban(
     with client.session_transaction() as session:
         flashes = session.get("_flashes", [])
     flash_messages = " ".join(message for _, message in flashes)
-    assert "2 Locatiekaartjes klaargezet in de printwachtrij." in flash_messages
+    assert "2 Locatiekaartjes klaargezet bij de printopdrachten." in flash_messages
 
 
 def test_room_page_exposes_independent_print_actions_with_counts(
@@ -1535,6 +1535,104 @@ def test_position_switch_to_standard_clears_all_kanban_values(app_module, monkey
     assert position.kanban_min_override is None
     assert position.kanban_refill_quantity_override is None
     assert position.strategie == "STANDARD"
+
+
+def test_room_page_empty_storage_location_says_opslaglocatie_not_kast(app_module):
+    """Ticket #20 AC1 (a spot the review's grep-sweep caught): the empty-row
+    fallback inside an Opslaglocatie's article table must not still say
+    'kast'.
+    """
+    class HashableNamespace(SimpleNamespace):
+        __hash__ = object.__hash__
+
+    ruimte = SimpleNamespace(
+        ruimte_id=9, kleur_hex=None, nummer=None, naam="Behandelkamer",
+    )
+    kast = HashableNamespace(kast_id=4, naam="Kast A", type_opslag="GRIJP")
+
+    with app_module.app.test_request_context("/"):
+        html = app_module.render_template(
+            "assistent_kamer_view.html",
+            ruimte=ruimte,
+            vestiging=None,
+            kasten_data={kast: []},
+            alle_artikelen=[],
+            open_kast_id=4,
+            kanban_count=0,
+            locatiekaart_count=0,
+        )
+
+    assert "Deze opslaglocatie is nog leeg." in html
+    assert "Deze kast is nog leeg." not in html
+
+
+def test_group_rows_by_location_unknown_kast_fallback_says_opslaglocatie(
+    app_module,
+):
+    """Ticket #20 AC1: the shared Kamerlijst/Scanlijst grouping fallback
+    label (rendered directly on-screen and in print) must not say 'kast'.
+    """
+    grouped = app_module._group_rows_by_location(
+        [(None, None, None, None, None)],
+        "inventory_rows",
+        lambda row: (None, None, None, None),
+    )
+    kast_group_naam = grouped[0]["ruimte_types"][0]["ruimtes"][0]["kasten"][0]["naam"]
+    assert kast_group_naam == "Onbekende Opslaglocatie"
+
+
+def test_display_opslagtype_translates_raw_values_and_passes_through_unknowns(
+    app_module,
+):
+    assert app_module.display_opslagtype("GRIJP") == "Grijpvoorraad"
+    assert app_module.display_opslagtype("BULK") == "Bulkvoorraad"
+    assert app_module.display_opslagtype(None) is None
+    assert app_module.display_opslagtype("") == ""
+    # Onbekende toekomstige waarden crashen niet — ze komen gewoon ongewijzigd terug.
+    assert app_module.display_opslagtype("NIEUW_TYPE") == "NIEUW_TYPE"
+
+
+def test_kanban_card_location_text_uses_translated_opslagtype(app_module, monkeypatch):
+    """Ticket #20 AC3: de ruwe opslagtype-waarde (GRIJP/BULK) staat niet meer
+    op het fysiek geprinte Kanban-kaartje — display_opslagtype vertaalt 'm
+    vóórdat location_text wordt samengesteld.
+    """
+    class FakeQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return None
+
+    class FakeSession:
+        def query(self, *args, **kwargs):
+            return FakeQuery()
+
+        def add(self, obj):
+            pass
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    position = SimpleNamespace(
+        voorraad_positie_id=1,
+        kanban_min_override=None,
+        kanban_refill_quantity_override=None,
+        materiaaltype="KANBAN",
+    )
+    article = SimpleNamespace(
+        lokaal_artikel_id=7, eigen_naam="Verband",
+        kanban_min=3, kanban_refill_quantity=4,
+    )
+    kast = SimpleNamespace(naam="Verbandkast", type_opslag="GRIJP")
+    bedrijf = SimpleNamespace(bedrijf_id=1, logo_url=None)
+
+    card = app_module._create_kanban_card(position, article, kast, SimpleNamespace(), bedrijf)
+
+    assert card.location_text == "Verbandkast (Grijpvoorraad)"
+    assert "GRIJP" not in card.location_text
 
 
 def test_standard_material_cannot_create_a_kanban_queue_item(app_module):
@@ -3238,6 +3336,116 @@ def test_print_list_macros_see_the_calling_template_context(app_module):
 
     assert "https://example.test/logo.png" in kamerlijst_html
     assert "https://example.test/logo.png" in scanlijst_html
+
+
+def test_dashboard_menu_and_pages_use_one_consistent_name_per_page(app_module):
+    """Ticket #20 AC2/AC4: menu, dashboard en paginakop gebruiken hetzelfde,
+    Ruimte-gerichte woord per pagina — geen 'Kamer(s)' meer, en geen drie
+    verschillende namen (bijv. 'Inrichting'/'Kamers & Inrichting'/
+    'Infrastructuur Beheer') voor dezelfde pagina.
+    """
+    client = app_module.app.test_client()
+    dashboard_html = client.get("/").get_data(as_text=True)
+
+    assert "Mijn Ruimtes" in dashboard_html
+    assert "Ruimtes & Opslaglocaties" in dashboard_html
+    assert "Centrale Catalogus" in dashboard_html
+    assert "Mijn Kamers" not in dashboard_html
+    assert "Inrichting" not in dashboard_html
+
+    with app_module.app.test_request_context("/"):
+        kamers_html = app_module.render_template(
+            "assistent_kamer_selectie.html", ruimtes=[]
+        )
+        infra_html = app_module.render_template(
+            "beheer_infra.html",
+            vestigingen=[], ruimtes=[], kasten=[], ruimte_types=[],
+            alle_ruimtes=[], active_vestiging_id=1, active_ruimte_id=1,
+        )
+        catalogus_html = app_module.render_template(
+            "beheer_catalogus.html", artikelen=[]
+        )
+
+    assert "Mijn Ruimtes" in kamers_html
+    assert "Kamer" not in kamers_html
+    assert "Ruimtes & Opslaglocaties" in infra_html
+    assert "Opslaglocatie Bewerken" in infra_html
+    assert "Naam Opslaglocatie" in infra_html
+    assert "Centrale Catalogus" in catalogus_html
+
+
+def test_print_queue_cancel_uses_one_consistent_verb(app_module, monkeypatch):
+    """Ticket #20 AC5: de knop, de bevestiging en de melding voor het
+    annuleren van een printopdracht gebruiken hetzelfde werkwoord
+    ('annuleren'), voor zowel Kanban-kaartjes als Locatiekaartjes.
+    """
+    queue_item = SimpleNamespace(
+        print_id=7, bedrijf_id=1, status="PENDING", printer_id="reception-badgy-01",
+        card_type="KANBAN_TWO_BIN", header_text="KAMER", header_color="#123456",
+        product_name="Verband", product_packaging="doos", product_sku="7",
+        product_image_url=None, company_logo_url=None, location_text="Kast A",
+        min_level=3, refill_quantity=4, max_level=None,
+        qr_code_value="https://example.test/scan/token", qr_human_readable="KB-1234",
+        aangemaakt_op=datetime.datetime(2026, 8, 28, 12, 0),
+    )
+    locatiekaart_version = SimpleNamespace(
+        locatiekaart_versie_id=1, ruimte_naam="1 Behandelkamer",
+        opslaglocatie_naam="Kast A", kamertype_naam="Behandeling",
+        kamertype_kleur="#123456", artikelnaam="Pleisters", artikel_foto_url=None,
+        materiaaltype="KANBAN", min_level=5,
+        created_at=datetime.datetime(2026, 8, 28, 12, 0),
+    )
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+        def desc(self):
+            return self
+
+    class FakeQueue:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [queue_item]
+
+    class FakeLocatiekaartQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [locatiekaart_version]
+
+    class FakeSession:
+        def query(self, *models):
+            if models and models[0] is app_module.LocatiekaartVersie:
+                return FakeLocatiekaartQuery()
+            return FakeQueue()
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_preview_layout", lambda: ({}, False, None))
+    monkeypatch.setattr(
+        app_module,
+        "Print_Queue",
+        SimpleNamespace(bedrijf_id=FakeField(), status=FakeField(), aangemaakt_op=FakeField()),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    response = app_module.app.test_client().get("/assistent/print-queue")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert html.count("Annuleren") == 2  # Kanban-rij + Locatiekaart-rij
+    assert "annuleren?" in html.lower()
+    assert "Verwijder" not in html
 
 
 def test_kamerlijst_print_collapses_single_value_hierarchy_and_has_one_title_and_backlink(

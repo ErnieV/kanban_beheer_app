@@ -417,6 +417,23 @@ def _get_reset_actor():
     )
 
 
+_OPSLAGTYPE_LABELS = {
+    'GRIJP': 'Grijpvoorraad',
+    'BULK': 'Bulkvoorraad',
+}
+
+
+def display_opslagtype(value):
+    """Ticket #20: vertaal de ruwe opslagtype-waarde (GRIJP/BULK) naar
+    gewone taal. Gebruikt zowel op het scherm als in location_text, de
+    tekst die op een fysiek geprint Kanban-kaartje terechtkomt — geen
+    interne status, dus de aanroeper bepaalt waar en wanneer.
+    """
+    if not value:
+        return value
+    return _OPSLAGTYPE_LABELS.get(value, value)
+
+
 def _article_kanban_standard(article):
     """Read the article standard, defaulting old rows to the new 1/1 default."""
     if article is None:
@@ -549,6 +566,7 @@ app.jinja_env.globals['position_kanban_override_values'] = (
     position_kanban_override_values
 )
 app.jinja_env.globals['kanban_display_values'] = kanban_display_values
+app.jinja_env.globals['display_opslagtype'] = display_opslagtype
 
 
 def build_locatiekaart_content(
@@ -847,7 +865,7 @@ def _create_kanban_card(pos, art, kast, ruimte, bedrijf, effective=None):
         public_token=secrets.token_urlsafe(32),
         human_code=human_code,
         product_name=art.eigen_naam,
-        location_text=f"{kast.naam} ({kast.type_opslag})",
+        location_text=f"{kast.naam} ({display_opslagtype(kast.type_opslag)})",
         product_sku=str(art.lokaal_artikel_id),
         status='PENDING_PRINT',
         created_at=utcnow()
@@ -884,7 +902,7 @@ def create_queue_item(pos, art, global_item, kast, ruimte, r_type, bedrijf):
         product_packaging=art.verpakkingseenheid_tekst or "Stuk",
         product_sku=str(art.lokaal_artikel_id),
         product_image_url=pos.locatie_foto_url or art.foto_url or (global_item.foto_url if global_item else None),
-        location_text=f"{kast.naam} ({kast.type_opslag})",
+        location_text=f"{kast.naam} ({display_opslagtype(kast.type_opslag)})",
         min_level=effective.min_level,
         refill_quantity=effective.refill_quantity,
         qr_code_value=_generate_public_scan_url(card.public_token),
@@ -1947,11 +1965,11 @@ def _send_locatiekaart_batch(location_versions, print_batch_id):
             skipped.append((label, company_logo_error))
             continue
         if not getattr(version, 'kamertype_naam', None):
-            skipped.append((label, 'Kamertype ontbreekt.'))
+            skipped.append((label, 'Ruimtetype ontbreekt.'))
             continue
         room_type_color = getattr(version, 'kamertype_kleur', None)
         if not room_type_color or not _HEX_COLOR_PATTERN.fullmatch(room_type_color):
-            skipped.append((label, 'Kamertype-kleur ontbreekt of is ongeldig.'))
+            skipped.append((label, 'Ruimtetype-kleur ontbreekt of is ongeldig.'))
             continue
         printable_versions.append(version)
 
@@ -2150,7 +2168,7 @@ def add_to_kast_from_room(kast_id):
     kast = get_scoped_item(Kast, kast_id, bedrijf_id)
     artikel = get_scoped_item(Lokaal_Artikel, artikel_id, bedrijf_id) if artikel_id else None
     if not kast or not artikel:
-        flash('Ongeldige kast of artikelkeuze.', 'warning')
+        flash('Ongeldige opslaglocatie of artikelkeuze.', 'warning')
         return redirect(url_for('assistent_kamers'))
 
     bestaat = db.session.query(Voorraad_Positie).filter_by(
@@ -2172,7 +2190,7 @@ def add_to_kast_from_room(kast_id):
         db.session.commit()
         flash('Artikel toegevoegd.', 'success')
     else:
-        flash('Artikel zit al in de kast.', 'warning')
+        flash('Artikel zit al in deze opslaglocatie.', 'warning')
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
 
@@ -2290,7 +2308,7 @@ def print_selectie(kaart_type, kast_id=None, ruimte_id=None):
             kaartje_meervoud = 's' if len(selected_items) != 1 else ''
             flash(
                 f'{len(selected_items)} {kaartje_label}{kaartje_meervoud} '
-                'klaargezet in de printwachtrij.',
+                'klaargezet bij de printopdrachten.',
                 'success',
             )
             return redirect(url_for('assistent_kamer_view', ruimte_id=target_ruimte_id))
@@ -2496,8 +2514,8 @@ def _group_rows_by_location(rows, row_key, extractor):
         if not kast_group:
             kast_group = {
                 "key": kast_key,
-                "naam": kast.naam if kast else "Onbekende kast",
-                "type_opslag": kast.type_opslag if kast else None,
+                "naam": kast.naam if kast else "Onbekende Opslaglocatie",
+                "type_opslag": display_opslagtype(kast.type_opslag) if kast else None,
                 row_key: []
             }
             ruimte_group["_kast_lookup"][kast_key] = kast_group
@@ -3231,7 +3249,7 @@ def beheer_infra():
                     return redirect(url_for('beheer_infra'))
                 ruimte_type_id = request.form.get('ruimte_type_id', type=int)
                 if not ruimte_type_id or not get_scoped_item(Ruimte_Type, ruimte_type_id, bedrijf_id):
-                    flash('Kies een geldig Kamertype.', 'warning')
+                    flash('Kies een geldig Ruimtetype.', 'warning')
                     return redirect(url_for('beheer_infra', vestiging_id=vest_id))
                 nieuwe_ruimte = Ruimte(bedrijf_id=bedrijf_id, vestiging_id=vest_id, naam=request.form.get('naam'), nummer=request.form.get('nummer'), ruimte_type_id=ruimte_type_id, type_ruimte='KAMER')
                 db.session.add(nieuwe_ruimte)
@@ -3384,7 +3402,7 @@ def update_item(type, id):
                 return redirect(request.referrer or url_for('beheer_infra'))
             ruimte_type_id = request.form.get('ruimte_type_id', type=int)
             if not ruimte_type_id or not get_scoped_item(Ruimte_Type, ruimte_type_id, bedrijf_id):
-                flash('Kies een geldig Kamertype.', 'warning')
+                flash('Kies een geldig Ruimtetype.', 'warning')
                 return redirect(request.referrer or url_for('beheer_infra'))
             changed = (
                 getattr(item, 'naam', None) != request.form.get('naam')
@@ -3418,7 +3436,7 @@ def update_item(type, id):
         elif type == 'ruimte_type':
             item = get_scoped_item(Ruimte_Type, id, bedrijf_id)
             if not item:
-                flash('Kamertype niet gevonden of geen toegang.', 'warning')
+                flash('Ruimtetype niet gevonden of geen toegang.', 'warning')
                 return redirect(request.referrer or url_for('beheer_infra'))
             changed = (
                 getattr(item, 'naam', None) != request.form.get('naam')

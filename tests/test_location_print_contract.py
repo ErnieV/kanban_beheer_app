@@ -428,10 +428,10 @@ def test_send_locatiekaart_batch_skips_cards_missing_room_type_name_or_color(
 
     assert sent is True
     assert sent_versions == [[printable]]
-    assert ("Naaldencontainer", "Kamertype ontbreekt.") in skipped
+    assert ("Naaldencontainer", "Ruimtetype ontbreekt.") in skipped
     assert (
         "Pleisters",
-        "Kamertype-kleur ontbreekt of is ongeldig.",
+        "Ruimtetype-kleur ontbreekt of is ongeldig.",
     ) in skipped
     assert commits == [True]
 

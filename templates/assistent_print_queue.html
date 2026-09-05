@@ -193,10 +193,10 @@
                                         <i class="bi bi-eye"></i> Voorbeeld
                                     </button>
 
-                                    <form action="{{ url_for('annuleren_print_opdracht', print_id=item.print_id) }}" method="POST" onsubmit="return confirm('Aanvraag direct verwijderen uit wachtrij?');">
+                                    <form action="{{ url_for('annuleren_print_opdracht', print_id=item.print_id) }}" method="POST" onsubmit="return confirm('Deze printopdracht annuleren?');">
                                         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="btn btn-outline-danger w-100" title="Verwijder uit wachtrij">
-                                            <i class="bi bi-trash"></i> Verwijder
+                                        <button type="submit" class="btn btn-outline-danger w-100" title="Annuleer deze printopdracht">
+                                            <i class="bi bi-x-circle"></i> Annuleren
                                         </button>
                                     </form>
                                 </div>
@@ -314,10 +314,10 @@
                                         </button>
                                     </form>
                                     <form action="{{ url_for('locatiekaart_annuleren', locatiekaart_versie_id=version.locatiekaart_versie_id) }}"
-                                          method="POST" onsubmit="return confirm('Aanvraag direct verwijderen uit wachtrij?');">
+                                          method="POST" onsubmit="return confirm('Deze printopdracht annuleren?');">
                                         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="btn btn-outline-danger w-100" title="Verwijder uit wachtrij">
-                                            <i class="bi bi-trash"></i> Verwijder
+                                        <button type="submit" class="btn btn-outline-danger w-100" title="Annuleer deze printopdracht">
+                                            <i class="bi bi-x-circle"></i> Annuleren
                                         </button>
                                     </form>
                                 </div>
