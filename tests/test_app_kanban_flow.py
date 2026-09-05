@@ -2506,6 +2506,234 @@ def test_verstuur_selectie_sends_only_the_posted_ids_and_flashes_success(
     assert "1 kaartje(s) verstuurd naar lokale printer." in flash_messages
 
 
+def test_verstuur_print_opdracht_connectivity_failure_redacts_technical_detail(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #30: a single Kanban send whose printservice connectivity
+    check fails must show only the safe generic message — never the raw
+    technical detail, which still reaches server-side logging via caplog —
+    and must leave the item PENDING (not deleted).
+    """
+    queue_item = SimpleNamespace(print_id=7, bedrijf_id=1, status="PENDING", kaart_id=None)
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+    class QueueQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return queue_item
+
+    class FakeSession:
+        def __init__(self):
+            self.deleted = []
+            self.committed = False
+
+        def query(self, *models):
+            return QueueQuery()
+
+        def delete(self, item):
+            self.deleted.append(item)
+
+        def commit(self):
+            self.committed = True
+
+    fake_session = FakeSession()
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "Print_Queue",
+        SimpleNamespace(print_id=FakeField(), bedrijf_id=FakeField(), status=FakeField()),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=fake_session))
+    monkeypatch.setattr(
+        app_module,
+        "test_print_service_connectivity",
+        lambda: (False, "PRINT_SERVICE_URL ontbreekt."),
+    )
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/assistent/print-queue/verstuur/7",
+            data={"_csrf_token": "test-csrf"},
+        )
+
+    assert response.status_code == 302
+    assert fake_session.deleted == []
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "PRINT_SERVICE_URL ontbreekt." not in flash_messages
+    assert "niet bereikbaar" in flash_messages
+    assert "openstaan" in flash_messages
+    assert "PRINT_SERVICE_URL ontbreekt." in caplog.text
+
+
+def test_verstuur_print_opdracht_send_failure_redacts_technical_detail(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #30: a single Kanban send whose actual print-service call
+    fails must show only the safe generic message — never the raw
+    printservice error — and must leave the item PENDING (not deleted or
+    marked printed).
+    """
+    queue_item = SimpleNamespace(print_id=7, bedrijf_id=1, status="PENDING", kaart_id=None)
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+    class QueueQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return queue_item
+
+    class FakeSession:
+        def __init__(self):
+            self.deleted = []
+            self.committed = False
+
+        def query(self, *models):
+            return QueueQuery()
+
+        def delete(self, item):
+            self.deleted.append(item)
+
+        def commit(self):
+            self.committed = True
+
+    fake_session = FakeSession()
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "Print_Queue",
+        SimpleNamespace(print_id=FakeField(), bedrijf_id=FakeField(), status=FakeField()),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=fake_session))
+    monkeypatch.setattr(
+        app_module, "test_print_service_connectivity", lambda: (True, "ok")
+    )
+    monkeypatch.setattr(
+        app_module,
+        "send_queue_item_to_print_service",
+        lambda *a, **k: (False, "Printservice fout: 500 Internal Server Error"),
+    )
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/assistent/print-queue/verstuur/7",
+            data={"_csrf_token": "test-csrf"},
+        )
+
+    assert response.status_code == 302
+    assert fake_session.deleted == []
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "Printservice fout: 500 Internal Server Error" not in flash_messages
+    assert "niet bereikbaar" in flash_messages
+    assert "openstaan" in flash_messages
+    assert "Printservice fout: 500 Internal Server Error" in caplog.text
+
+
+def test_verstuur_alle_mixed_outcome_redacts_failures_and_keeps_failed_item_pending(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #30 AC8: a batch send with one success and one failure must
+    flash the success count normally, flash the failure count generically
+    (no print_id or raw error text in the assistant-facing message), log
+    each failure's technical detail server-side, delete only the succeeded
+    item, and leave the failed item untouched (still PENDING).
+    """
+    item_ok = SimpleNamespace(print_id=1, bedrijf_id=1, status="PENDING", kaart_id=None)
+    item_fail = SimpleNamespace(print_id=2, bedrijf_id=1, status="PENDING", kaart_id=None)
+
+    class FakeField:
+        def __eq__(self, other):
+            return True
+
+        def asc(self):
+            return self
+
+    class QueueQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [item_ok, item_fail]
+
+    class FakeSession:
+        def __init__(self):
+            self.deleted = []
+            self.committed = False
+
+        def query(self, *models):
+            return QueueQuery()
+
+        def delete(self, item):
+            self.deleted.append(item)
+
+        def commit(self):
+            self.committed = True
+
+    fake_session = FakeSession()
+
+    def fake_send(item, source_map=None):
+        if item is item_ok:
+            return True, None
+        return False, "Printservice fout: connection reset by peer"
+
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module, "test_print_service_connectivity", lambda: (True, "ok")
+    )
+    monkeypatch.setattr(
+        app_module,
+        "Print_Queue",
+        SimpleNamespace(
+            print_id=FakeField(),
+            bedrijf_id=FakeField(),
+            status=FakeField(),
+            aangemaakt_op=FakeField(),
+        ),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=fake_session))
+    monkeypatch.setattr(app_module, "send_queue_item_to_print_service", fake_send)
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/assistent/print-queue/verstuur-alles",
+            data={"_csrf_token": "test-csrf"},
+        )
+
+    assert response.status_code == 302
+    assert fake_session.deleted == [item_ok]
+    assert fake_session.committed is True
+    with client.session_transaction() as session:
+        flashes = session.get("_flashes", [])
+    flash_messages = " ".join(message for _, message in flashes)
+    assert "1 kaartje(s) verstuurd naar lokale printer." in flash_messages
+    assert "1 kaartje(s) kon(den) niet verstuurd worden" in flash_messages
+    assert "openstaan" in flash_messages
+    assert "print_id=2" not in flash_messages
+    assert "connection reset by peer" not in flash_messages
+    assert "connection reset by peer" in caplog.text
+
+
 def test_verstuur_selectie_without_any_checked_row_sends_nothing(
     app_module, monkeypatch
 ):

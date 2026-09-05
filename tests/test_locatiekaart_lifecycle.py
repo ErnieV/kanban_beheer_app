@@ -326,12 +326,16 @@ def test_locatiekaart_verstuur_enkel_sends_and_flashes_plain_language(
 
 
 def test_locatiekaart_verstuur_enkel_blocked_by_failed_connectivity_check(
-    app_module, monkeypatch
+    app_module, monkeypatch, caplog
 ):
     """Symmetry fix from the ticket #26 spec review: the Locatiekaart-side
     send routes must run the same connectivity pre-flight the Kanban-side
     routes already ran, instead of discovering an unreachable printservice
     only after fetching/encoding every card's images.
+
+    Ticket #30: the assistente only sees a safe, generic message — the raw
+    "PRINT_SERVICE_URL ontbreekt." detail (an environment-variable name)
+    goes to the server log instead.
     """
     send_calls = []
     monkeypatch.setattr(app_module, "check_db", lambda: True)
@@ -350,14 +354,19 @@ def test_locatiekaart_verstuur_enkel_blocked_by_failed_connectivity_check(
     version_id = _create_pending_locatiekaart_version(app_module)
 
     client = _csrf_client(app_module)
-    response = client.post(
-        f"/assistent/print-queue/locatiekaart/verstuur/{version_id}",
-        data={"_csrf_token": "test-csrf"},
-    )
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            f"/assistent/print-queue/locatiekaart/verstuur/{version_id}",
+            data={"_csrf_token": "test-csrf"},
+        )
 
     assert response.status_code == 302
     assert send_calls == []
-    assert "PRINT_SERVICE_URL ontbreekt." in _flash_messages(client)
+    flash_messages = _flash_messages(client)
+    assert "PRINT_SERVICE_URL ontbreekt." not in flash_messages
+    assert "niet bereikbaar" in flash_messages
+    assert "openstaan" in flash_messages
+    assert "PRINT_SERVICE_URL ontbreekt." in caplog.text
     assert _locatiekaart_status(app_module, version_id) == (
         app_module.LocatiekaartStatus.PENDING_PRINT.value
     )
@@ -387,8 +396,13 @@ def test_locatiekaart_verstuur_enkel_not_found_flashes_warning(
 
 
 def test_locatiekaart_verstuur_enkel_reports_failure_without_marking_printed(
-    app_module, monkeypatch
+    app_module, monkeypatch, caplog
 ):
+    """Ticket #30: een technische printservice-fout ("Printservice fout:
+    timeout") gaat naar de serverlogging, niet naar de assistente — zij ziet
+    alleen de veilige, generieke melding. De versie blijft ongewijzigd
+    PENDING_PRINT (nooit stilzwijgend als verstuurd markeren).
+    """
     monkeypatch.setattr(app_module, "check_db", lambda: True)
     monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
     monkeypatch.setattr(
@@ -403,14 +417,63 @@ def test_locatiekaart_verstuur_enkel_reports_failure_without_marking_printed(
     version_id = _create_pending_locatiekaart_version(app_module)
 
     client = _csrf_client(app_module)
-    response = client.post(
-        f"/assistent/print-queue/locatiekaart/verstuur/{version_id}",
-        data={"_csrf_token": "test-csrf"},
-    )
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            f"/assistent/print-queue/locatiekaart/verstuur/{version_id}",
+            data={"_csrf_token": "test-csrf"},
+        )
 
     assert response.status_code == 302
-    assert "A4-printaanvraag mislukt" in _flash_messages(client)
+    flash_messages = _flash_messages(client)
+    assert "Printservice fout: timeout" not in flash_messages
+    assert "A4-printaanvraag mislukt" not in flash_messages
+    assert "niet bereikbaar" in flash_messages
+    assert "openstaan" in flash_messages
+    assert "Printservice fout: timeout" in caplog.text
     # Nooit stilzwijgend als verstuurd markeren wanneer het versturen mislukte.
+    assert _locatiekaart_status(app_module, version_id) == (
+        app_module.LocatiekaartStatus.PENDING_PRINT.value
+    )
+
+
+def test_locatiekaart_verstuur_enkel_shows_no_card_printable_message_unredacted(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #30: 'Geen enkele kaart is printbaar' is a per-article
+    data-validation notice (missing Kamertype here), not a technical
+    printservice failure — it is already plain-language business feedback,
+    so it must reach the assistente as-is instead of the generic redacted
+    message that a real connectivity/send failure gets.
+    """
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module, "test_print_service_connectivity", lambda: (True, "ok")
+    )
+    send_calls = []
+    monkeypatch.setattr(
+        app_module,
+        "send_location_cards_to_print_service",
+        lambda *a, **k: send_calls.append(True),
+    )
+
+    version_id = _create_pending_locatiekaart_version(
+        app_module, kamertype_naam=None,
+    )
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            f"/assistent/print-queue/locatiekaart/verstuur/{version_id}",
+            data={"_csrf_token": "test-csrf"},
+        )
+
+    assert response.status_code == 302
+    assert send_calls == []
+    flash_messages = _flash_messages(client)
+    assert "Geen enkele kaart is printbaar" in flash_messages
+    assert "Ruimtetype ontbreekt." in flash_messages
+    assert "niet bereikbaar" not in flash_messages
     assert _locatiekaart_status(app_module, version_id) == (
         app_module.LocatiekaartStatus.PENDING_PRINT.value
     )

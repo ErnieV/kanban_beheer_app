@@ -467,3 +467,43 @@ def test_send_locatiekaart_batch_fails_when_all_selected_cards_are_unprintable(
     assert metadata is None
     assert "Geen enkele kaart is printbaar" in error
     assert ("Naaldencontainer", "Artikel-foto ontbreekt.") in skipped
+
+
+def test_send_locatiekaart_batch_redacts_technical_fetch_error_from_skip_reason(
+    app_module, monkeypatch, caplog
+):
+    """Ticket #30: '_send_locatiekaart_versions_and_flash' shows a 'Geen
+    enkele kaart is printbaar' error as-is, unredacted, since it's normally
+    plain-language per-article data feedback. But an unreachable
+    artikel-foto URL raises a requests exception whose str() typically
+    embeds the URL/connection detail — that detail must never end up in the
+    skip reason shown to the assistente, only in server-side logging.
+    """
+    import requests
+
+    unprintable = _location_card_version(
+        locatiekaart_versie_id=1,
+        artikelnaam="Naaldencontainer",
+        artikel_foto_url="https://cdn.example.test/secret-bucket/photo.png",
+    )
+
+    def fake_get(url, timeout=None):
+        raise requests.exceptions.ConnectionError(
+            "HTTPSConnectionPool(host='cdn.example.test', port=443): "
+            "Max retries exceeded with url: /secret-bucket/photo.png"
+        )
+
+    monkeypatch.setattr(app_module.requests, "get", fake_get)
+
+    with caplog.at_level("ERROR"):
+        sent, error, metadata, skipped = app_module._send_locatiekaart_batch(
+            [unprintable], "batch-1",
+        )
+
+    assert sent is False
+    assert metadata is None
+    assert "Geen enkele kaart is printbaar" in error
+    assert "cdn.example.test" not in error
+    assert "secret-bucket" not in error
+    assert ("Naaldencontainer", "Artikel-foto kon niet worden opgehaald.") in skipped
+    assert "cdn.example.test" in caplog.text

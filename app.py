@@ -1016,7 +1016,14 @@ def _image_to_base64_object(image_source, label):
         response = requests.get(image_source, timeout=PRINT_REQUEST_TIMEOUT)
         response.raise_for_status()
     except requests.RequestException as exc:
-        return None, f"{label} kon niet worden opgehaald: {exc}"
+        # Ticket #30: str(exc) op een requests-exceptie bevat vaak de
+        # afbeeldings-URL of verbindingsdetails. Deze melding komt terecht in
+        # de "Geen enkele kaart is printbaar"/"overgeslagen"-meldingen, die
+        # bewust ongeredigeerd aan de assistente worden getoond — dus mag hij
+        # zelf geen technisch detail bevatten. De echte oorzaak gaat naar de
+        # serverlogging.
+        _log_print_failure(f"_image_to_base64_object {label}", exc)
+        return None, f"{label} kon niet worden opgehaald."
 
     content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
     if not content_type.startswith("image/"):
@@ -1929,6 +1936,13 @@ def _print_selection_label(kaart_type, singular=False):
 
 _HEX_COLOR_PATTERN = re.compile(r'^#[0-9A-Fa-f]{6}$')
 
+# Ticket #30: gedeeld met _send_locatiekaart_versions_and_flash, dat op dit
+# voorvoegsel controleert om een data-validatiefout (niet-technisch, al
+# veilig om te tonen) te onderscheiden van een echte printservice-storing
+# (die wél geredigeerd moet worden). Eén constante voorkomt dat de twee
+# plekken uit elkaar lopen als de tekst ooit wijzigt.
+_NO_CARD_PRINTABLE_PREFIX = 'Geen enkele kaart is printbaar'
+
 
 def _send_locatiekaart_batch(location_versions, print_batch_id):
     """Send a Locatiekaart batch to the A4 print service and mark accepted
@@ -1975,7 +1989,7 @@ def _send_locatiekaart_batch(location_versions, print_batch_id):
 
     if not printable_versions:
         reasons = '; '.join(f'{name} ({reason})' for name, reason in skipped)
-        return False, f'Geen enkele kaart is printbaar. {reasons}', None, skipped
+        return False, f'{_NO_CARD_PRINTABLE_PREFIX}. {reasons}', None, skipped
 
     sent, error, metadata = send_location_cards_to_print_service(
         printable_versions,
@@ -2672,6 +2686,31 @@ def test_print_verbinding():
         flash(detail, 'danger')
     return redirect(url_for('assistent_print_queue'))
 
+def _log_print_failure(log_context, technical_detail):
+    """Ticket #30: gedeeld logformaat voor een mislukte printverzending, zodat
+    een enkel mislukt item (dat geen eigen flash krijgt binnen een batch) en
+    _flash_print_failure hetzelfde spoor achterlaten in de serverlogging.
+    """
+    app.logger.error("%s: %s", log_context, technical_detail)
+
+
+def _flash_print_failure(log_context, technical_detail):
+    """Ticket #30: log de technische oorzaak met context in de
+    serverlogging, en toon de assistente alleen een veilige, begrijpelijke
+    melding — nooit een URL, HTTP-status, exceptionnaam, batch-/job-ID,
+    header, omgevingsvariabele of responsbody. Geldt voor beide
+    printstromen (Badgy en A4); de melding zegt altijd dat er niets is
+    geprint, dat de opdracht open blijft staan, en wat de assistente kan
+    doen.
+    """
+    _log_print_failure(log_context, technical_detail)
+    flash(
+        'De printer is niet bereikbaar. Er is niets geprint — de opdracht '
+        'blijft openstaan. Probeer het later opnieuw, of vraag hulp.',
+        'danger',
+    )
+
+
 @app.route('/assistent/print-queue/verstuur/<int:print_id>', methods=['POST'])
 def verstuur_print_opdracht(print_id):
     if not check_db():
@@ -2689,7 +2728,9 @@ def verstuur_print_opdracht(print_id):
 
     ok, detail = test_print_service_connectivity()
     if not ok:
-        flash(detail, 'danger')
+        _flash_print_failure(
+            f"verstuur_print_opdracht connectivity print_id={print_id}", detail
+        )
         return redirect(url_for('assistent_print_queue'))
 
     sent, error_msg = send_queue_item_to_print_service(item)
@@ -2699,23 +2740,28 @@ def verstuur_print_opdracht(print_id):
         db.session.commit()
         flash("Kaartje naar lokale printer gestuurd.", "success")
     else:
-        flash(error_msg, "danger")
+        _flash_print_failure(
+            f"verstuur_print_opdracht send print_id={print_id}", error_msg
+        )
     return redirect(url_for('assistent_print_queue'))
 
 def _send_queue_items_and_flash(items):
     """Shared tail for verstuur_alle_print_opdrachten and
     verstuur_selectie_print_opdrachten (ticket #26): test connectivity, send
     each item, mark/delete on success, then flash the aggregate outcome.
+
+    Ticket #30: een mislukt item logt zijn technische foutdetail
+    server-side en telt mee in een generieke aantal-mislukt-melding — de
+    assistente ziet nooit een print_id of de ruwe printservice-foutmelding.
     """
     ok, detail = test_print_service_connectivity()
     if not ok:
-        flash(detail, 'danger')
+        _flash_print_failure("_send_queue_items_and_flash connectivity", detail)
         return
 
     queue_sources = _queue_item_sources(items)
     success_count = 0
     fail_count = 0
-    fail_messages = []
 
     for item in items:
         sent, error_msg = send_queue_item_to_print_service(item, queue_sources)
@@ -2725,16 +2771,21 @@ def _send_queue_items_and_flash(items):
             success_count += 1
         else:
             fail_count += 1
-            if len(fail_messages) < 3:
-                fail_messages.append(f"ID {item.print_id}: {error_msg}")
+            _log_print_failure(
+                f"_send_queue_items_and_flash send print_id={item.print_id}",
+                error_msg,
+            )
 
     db.session.commit()
 
     if success_count:
         flash(f"{success_count} kaartje(s) verstuurd naar lokale printer.", "success")
     if fail_count:
-        extra = " | ".join(fail_messages)
-        flash(f"{fail_count} opdracht(en) mislukt. {extra}", "danger")
+        flash(
+            f"{fail_count} kaartje(s) kon(den) niet verstuurd worden. Ze "
+            "blijven openstaan — probeer het later opnieuw, of vraag hulp.",
+            "danger",
+        )
 
 
 @app.route('/assistent/print-queue/verstuur-alles', methods=['POST'])
@@ -2824,17 +2875,26 @@ def _send_locatiekaart_versions_and_flash(versions):
     (BESLIST-3: keep the flow as identical as possible) instead of
     discovering an unreachable printservice only after fetching/encoding
     every card's images.
+
+    Ticket #30: a genuine printservice failure is logged with context and
+    shown to the assistente only as a safe, generic message. A "no card is
+    printable" failure is different — it's an already-plain-language,
+    per-article data-completeness notice (missing photo/Kamertype), not a
+    technical printservice error, so it's shown as-is rather than redacted.
     """
     ok, detail = test_print_service_connectivity()
     if not ok:
-        flash(detail, 'danger')
+        _flash_print_failure("_send_locatiekaart_versions_and_flash connectivity", detail)
         return
 
     sent, error, metadata, skipped = _send_locatiekaart_batch(
         versions, str(uuid.uuid4()),
     )
     if not sent:
-        flash(f'A4-printaanvraag mislukt: {error}', 'danger')
+        if error and error.startswith(_NO_CARD_PRINTABLE_PREFIX):
+            flash(error, 'danger')
+        else:
+            _flash_print_failure("_send_locatiekaart_versions_and_flash send", error)
         return
     if skipped:
         flash(
