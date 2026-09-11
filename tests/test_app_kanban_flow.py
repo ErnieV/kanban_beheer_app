@@ -57,6 +57,55 @@ def test_check_db_recovers_from_a_transient_startup_connection_failure(
     assert attempts == ["recovery"]
 
 
+def test_schema_expansion_recreates_kaart_id_index_before_making_column_nullable(
+    app_module, monkeypatch
+):
+    """SQL Server cannot alter kaart_id while its lookup index still exists."""
+    statements = []
+
+    class FakeInspector:
+        def has_table(self, table_name):
+            return table_name == "Kanban_Scanlijst_Item"
+
+        def get_columns(self, table_name):
+            assert table_name == "Kanban_Scanlijst_Item"
+            return [
+                {"name": "kaart_id", "nullable": False},
+                {"name": "voorraad_positie_id", "nullable": True},
+            ]
+
+        def get_indexes(self, table_name):
+            assert table_name == "Kanban_Scanlijst_Item"
+            return [{
+                "name": "ix_Kanban_Scanlijst_Item_kaart_id",
+                "column_names": ["kaart_id"],
+                "unique": False,
+            }]
+
+    class FakeSession:
+        def execute(self, statement):
+            statements.append(str(statement))
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(app_module, "inspect", lambda _: FakeInspector())
+    monkeypatch.setattr(
+        app_module, "db", SimpleNamespace(engine=object(), session=FakeSession())
+    )
+
+    app_module.ensure_kanban_settings_schema()
+
+    assert statements == [
+        "DROP INDEX [ix_Kanban_Scanlijst_Item_kaart_id] "
+        "ON [Kanban_Scanlijst_Item]",
+        "ALTER TABLE [Kanban_Scanlijst_Item] ALTER COLUMN [kaart_id] "
+        "NVARCHAR(36) NULL",
+        "CREATE INDEX [ix_Kanban_Scanlijst_Item_kaart_id] "
+        "ON [Kanban_Scanlijst_Item] ([kaart_id])",
+    ]
+
+
 def test_article_edit_is_a_user_facing_flask_flow_for_the_new_standard(
     app_module, monkeypatch
 ):

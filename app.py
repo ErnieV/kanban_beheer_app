@@ -247,10 +247,29 @@ def ensure_kanban_settings_schema():
             None,
         )
         if kaart_id_column is not None and not kaart_id_column['nullable']:
+            # SQL Server will not alter a column while an index depends on it.
+            # Preserve the existing single-column lookup index that
+            # ``KanbanScanlijstItem.kaart_id`` declares, then recreate it
+            # immediately after the nullable migration.
+            kaart_id_index_name = 'ix_Kanban_Scanlijst_Item_kaart_id'
+            has_kaart_id_index = any(
+                index['name'] == kaart_id_index_name
+                for index in inspector.get_indexes('Kanban_Scanlijst_Item')
+            )
+            if has_kaart_id_index:
+                db.session.execute(text(
+                    f"DROP INDEX [{kaart_id_index_name}] "
+                    "ON [Kanban_Scanlijst_Item]"
+                ))
             db.session.execute(text(
                 "ALTER TABLE [Kanban_Scanlijst_Item] ALTER COLUMN [kaart_id] "
                 "NVARCHAR(36) NULL"
             ))
+            if has_kaart_id_index:
+                db.session.execute(text(
+                    f"CREATE INDEX [{kaart_id_index_name}] "
+                    "ON [Kanban_Scanlijst_Item] ([kaart_id])"
+                ))
             changed = True
 
     if changed:
