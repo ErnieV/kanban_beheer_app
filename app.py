@@ -259,6 +259,7 @@ def ensure_kanban_settings_schema():
 # --- AUTOMAP & MODELS ---
 Base = automap_base()
 db_operational = False
+DATABASE_INITIALIZATION_LOCK = threading.Lock()
 
 Global_Catalogus = None
 Lokaal_Artikel = None
@@ -273,26 +274,62 @@ Leverancier = None
 PREVIEW_LAYOUT_CACHE = None
 PREVIEW_LAYOUT_LOCK = threading.Lock()
 
-with app.app_context():
-    try:
-        ensure_scan_schema()
-        Base.prepare(db.engine, reflect=True)
-        Global_Catalogus = getattr(Base.classes, 'Global_Catalogus', None)
-        Lokaal_Artikel = getattr(Base.classes, 'Lokaal_Artikel', None)
-        Voorraad_Positie = getattr(Base.classes, 'Voorraad_Positie', None)
-        Bedrijf = getattr(Base.classes, 'Bedrijf', None)
-        Vestiging = getattr(Base.classes, 'Vestiging', None)
-        Ruimte = getattr(Base.classes, 'Ruimte', None)
-        Ruimte_Type = getattr(Base.classes, 'Ruimte_Type', None)
-        Kast = getattr(Base.classes, 'Kast', None)
-        Print_Queue = getattr(Base.classes, 'Print_Queue', None)
-        Leverancier = getattr(Base.classes, 'Leverancier', None)
 
-        if Global_Catalogus and Bedrijf:
+def initialize_database_models():
+    """Reflect the database models, retrying after a transient cold-start error."""
+    global Base, db_operational
+    global Global_Catalogus, Lokaal_Artikel, Voorraad_Positie, Bedrijf
+    global Vestiging, Ruimte, Ruimte_Type, Kast, Print_Queue, Leverancier
+
+    with DATABASE_INITIALIZATION_LOCK:
+        if db_operational:
+            return True
+
+        try:
+            # A failed Azure SQL socket must not be retained when a later
+            # request retries the startup reflection.
+            db.session.remove()
+            db.engine.dispose()
+            candidate_base = automap_base()
+            ensure_scan_schema()
+            candidate_base.prepare(db.engine, reflect=True)
+            global_catalogus = getattr(candidate_base.classes, 'Global_Catalogus', None)
+            lokaal_artikel = getattr(candidate_base.classes, 'Lokaal_Artikel', None)
+            voorraad_positie = getattr(candidate_base.classes, 'Voorraad_Positie', None)
+            bedrijf = getattr(candidate_base.classes, 'Bedrijf', None)
+            vestiging = getattr(candidate_base.classes, 'Vestiging', None)
+            ruimte = getattr(candidate_base.classes, 'Ruimte', None)
+            ruimte_type = getattr(candidate_base.classes, 'Ruimte_Type', None)
+            kast = getattr(candidate_base.classes, 'Kast', None)
+            print_queue = getattr(candidate_base.classes, 'Print_Queue', None)
+            leverancier = getattr(candidate_base.classes, 'Leverancier', None)
+
+            if not global_catalogus or not bedrijf:
+                raise RuntimeError('De vereiste databasetabellen ontbreken.')
+
+            Base = candidate_base
+            Global_Catalogus = global_catalogus
+            Lokaal_Artikel = lokaal_artikel
+            Voorraad_Positie = voorraad_positie
+            Bedrijf = bedrijf
+            Vestiging = vestiging
+            Ruimte = ruimte
+            Ruimte_Type = ruimte_type
+            Kast = kast
+            Print_Queue = print_queue
+            Leverancier = leverancier
             db_operational = True
-            print("Database succesvol verbonden.")
-    except Exception as e:
-        print(f"CRITIQUE DB ERROR: {e}")
+            app.logger.info('Database succesvol verbonden.')
+            return True
+        except Exception:
+            db.session.remove()
+            db_operational = False
+            app.logger.exception('Database-initialisatie mislukt; volgende aanvraag probeert opnieuw.')
+            return False
+
+
+with app.app_context():
+    initialize_database_models()
 
 # --- CONTEXT PROCESSOR ---
 
@@ -348,8 +385,14 @@ def get_huidig_bedrijf_id():
         return eerste.bedrijf_id
     return None
 
+def database_is_available():
+    if db_operational:
+        return True
+    return initialize_database_models()
+
+
 def check_db():
-    if not db_operational:
+    if not database_is_available():
         flash("Geen verbinding met de database.", 'danger')
         return False
     return True
@@ -2226,7 +2269,7 @@ def api_update_voorraad_positie(voorraad_positie_id):
     HTTP status shape matches api_preview_layout, not the check_db()-based
     api_artikel_gebruik/api_ruimte_kopieer_preview routes.
     """
-    if not db_operational:
+    if not database_is_available():
         return jsonify({'ok': False, 'error': 'Geen verbinding met de database.'}), 503
     bedrijf_id = get_huidig_bedrijf_id()
     positie = get_scoped_item(Voorraad_Positie, voorraad_positie_id, bedrijf_id)

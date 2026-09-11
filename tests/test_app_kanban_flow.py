@@ -34,6 +34,29 @@ def test_database_pool_preflight_is_enabled(app_module):
     assert engine_options["pool_recycle"] == 300
 
 
+def test_check_db_recovers_from_a_transient_startup_connection_failure(
+    app_module, monkeypatch
+):
+    """A failed cold-start connection must be retried for the next request."""
+    attempts = []
+
+    monkeypatch.setattr(app_module, "db_operational", False)
+
+    def recover_database_models():
+        attempts.append("recovery")
+        app_module.db_operational = True
+        return True
+
+    monkeypatch.setattr(
+        app_module, "initialize_database_models", recover_database_models
+    )
+
+    with app_module.app.test_request_context("/"):
+        assert app_module.check_db() is True
+
+    assert attempts == ["recovery"]
+
+
 def test_article_edit_is_a_user_facing_flask_flow_for_the_new_standard(
     app_module, monkeypatch
 ):
