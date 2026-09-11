@@ -26,6 +26,14 @@ def _csrf_client(app_module):
     return client
 
 
+def test_database_pool_preflight_is_enabled(app_module):
+    """A stale Azure SQL socket must be replaced before a user request uses it."""
+    engine_options = app_module.app.config["SQLALCHEMY_ENGINE_OPTIONS"]
+
+    assert engine_options["pool_pre_ping"] is True
+    assert engine_options["pool_recycle"] == 300
+
+
 def test_article_edit_is_a_user_facing_flask_flow_for_the_new_standard(
     app_module, monkeypatch
 ):

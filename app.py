@@ -93,6 +93,13 @@ app.config['SQLALCHEMY_DATABASE_URI'] = database_url or (
     f"?driver={driver}&TrustServerCertificate=yes"
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Azure SQL can close an idle TCP connection while it remains in this process'
+# pool. Test a connection before checkout and retire it regularly, so the first
+# request after such a reset does not surface as a Flask 500.
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+}
 
 db = SQLAlchemy(app)
 
