@@ -129,8 +129,16 @@
                                         <form action="{{ url_for('kanban_aanvragen_enkel', voorraad_positie_id=pos.voorraad_positie_id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                                             {% set print_enkel_label = 'Kanban-kaartje aanvragen voor ' + lokaal.eigen_naam if effectieve_kanban else 'Standaard materiaal heeft geen Kanban-kaart' %}
-                                            <button type="submit" data-print-enkel-button class="btn btn-sm btn-outline-secondary" title="{{ print_enkel_label }}" aria-label="{{ print_enkel_label }}" {% if not effectieve_kanban %}disabled{% endif %}>
+                                            <button type="submit" data-print-enkel-button class="btn btn-sm btn-outline-dark" title="{{ print_enkel_label }}" aria-label="{{ print_enkel_label }}" {% if not effectieve_kanban %}disabled{% endif %}>
                                                 <i class="bi bi-printer" aria-hidden="true"></i>
+                                            </button>
+                                        </form>
+                                        <form action="{{ url_for('kast_print_selectie', kast_id=kast.kast_id, kaart_type='locatie') }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                                            <input type="hidden" name="position_ids" value="{{ pos.voorraad_positie_id }}">
+                                            {% set locatiekaart_enkel_label = 'Locatiekaartje aanvragen voor ' + lokaal.eigen_naam %}
+                                            <button type="submit" class="btn btn-sm btn-outline-primary" title="{{ locatiekaart_enkel_label }}" aria-label="{{ locatiekaart_enkel_label }}">
+                                                <i class="bi bi-geo-alt" aria-hidden="true"></i>
                                             </button>
                                         </form>
 

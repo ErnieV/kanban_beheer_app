@@ -1392,6 +1392,11 @@ def test_room_page_exposes_independent_print_actions_with_counts(
     assert "Locatiekaartjes (2)" in html
     assert "/assistent/kamer/9/print/kanban" in html
     assert "/assistent/kamer/9/print/locatie" in html
+    assert "/assistent/kast/5/print/locatie" in html
+    assert 'name="position_ids" value="101"' in html
+    assert 'aria-label="Locatiekaartje aanvragen voor Zebra"' in html
+    assert 'data-print-enkel-button class="btn btn-sm btn-outline-dark"' in html
+    assert '<i class="bi bi-geo-alt" aria-hidden="true"></i>' in html
     # Ticket #17 AC2: de Ruimte-pagina heeft een knop om de Kamerlijst van
     # deze Ruimte te printen.
     assert "Kamerlijst printen" in html
@@ -3060,8 +3065,8 @@ def test_print_queue_view_renders_both_kanban_and_locatiekaart_sections(
     assert (
         'action="/assistent/print-queue/locatiekaart/annuleren-alles"' in html
     )
-    assert "Alles verwijderen" in html
-    assert "Alle 1 openstaande Locatiekaartjes uit Printopdrachten verwijderen?" in html
+    assert "Alles annuleren" in html
+    assert "Alle 1 openstaande Locatiekaartjes annuleren?" in html
     # Ticket #29: rustige takenlijst — taakgegevens zichtbaar, technische
     # diagnose en identificatoren niet. (De inline preview-<script> mag QR-
     # en SKU-gerelateerde code bevatten — die specifieke woorden dus niet

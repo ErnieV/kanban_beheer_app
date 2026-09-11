@@ -3226,7 +3226,7 @@ def locatiekaart_annuleren_alles():
     )
     db.session.commit()
     flash(
-        f"{cancelled_count} Locatiekaartjes verwijderd uit Printopdrachten.",
+        f"{cancelled_count} Locatiekaartjes geannuleerd.",
         "info",
     )
     return redirect(url_for('assistent_print_queue'))

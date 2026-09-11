@@ -700,7 +700,7 @@ def test_locatiekaart_annuleren_alles_cancels_only_pending_versions_for_company(
     assert _locatiekaart_status(app_module, other_company) == (
         app_module.LocatiekaartStatus.PENDING_PRINT.value
     )
-    assert "2 Locatiekaartjes verwijderd uit Printopdrachten." in _flash_messages(
+    assert "2 Locatiekaartjes geannuleerd." in _flash_messages(
         client
     )
 

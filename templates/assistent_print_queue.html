@@ -198,12 +198,12 @@
                 </button>
             </form>
             <form action="{{ url_for('locatiekaart_annuleren_alles') }}" method="POST" class="d-inline"
-                  onsubmit="return confirm('Alle {{ locatiekaart_versions|length }} openstaande Locatiekaartjes uit Printopdrachten verwijderen?');">
+                  onsubmit="return confirm('Alle {{ locatiekaart_versions|length }} openstaande Locatiekaartjes annuleren?');">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-outline-danger"
                         title="Annuleer alle openstaande Locatiekaartjes"
                         {% if not locatiekaart_versions %}disabled{% endif %}>
-                    <i class="bi bi-trash"></i> Alles verwijderen
+                    <i class="bi bi-x-circle"></i> Alles annuleren
                 </button>
             </form>
         </div>
