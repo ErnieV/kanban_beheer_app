@@ -544,6 +544,14 @@ _OPSLAGTYPE_LABELS = {
     'BULK': 'Bulkvoorraad',
 }
 
+# `strategie` is a legacy database field. Its CHECK constraint predates the
+# Dutch Materiaaltype vocabulary: ordinary (non-Kanban) material is stored as
+# VISUAL_REVIEW, while a Kanban position is TWO_BIN.
+_POSITION_STRATEGIES = {
+    Materiaaltype.KANBAN: 'TWO_BIN',
+    Materiaaltype.STANDAARD: 'VISUAL_REVIEW',
+}
+
 
 def display_opslagtype(value):
     """Ticket #20: vertaal de ruwe opslagtype-waarde (GRIJP/BULK) naar
@@ -671,11 +679,7 @@ def _set_position_kanban_values(position, article, form):
         )
 
     setattr(position, 'materiaaltype', material_type.value)
-    setattr(
-        position,
-        'strategie',
-        'STANDARD' if material_type is Materiaaltype.STANDAARD else 'TWO_BIN',
-    )
+    setattr(position, 'strategie', _POSITION_STRATEGIES[material_type])
     setattr(position, 'kanban_min_override', min_override)
     setattr(position, 'kanban_refill_quantity_override', refill_override)
 
@@ -1859,20 +1863,55 @@ def nieuw_bedrijf():
 # maar in het echte bestand moeten ze behouden blijven.
 # Hieronder staan ALLE routes die we eerder hadden, ongewijzigd:
 
+def _group_rooms_by_type(ruimtes):
+    """Prepare the assistant's rooms as calm, recognisable type groups."""
+    groups = []
+    groups_by_key = {}
+
+    for ruimte, vestiging, ruimte_type, opslaglocatie_count in ruimtes:
+        type_key = (
+            getattr(ruimte_type, 'ruimte_type_id', None)
+            if ruimte_type else None
+        ) or 'geen-ruimtetype'
+        group = groups_by_key.get(type_key)
+        if not group:
+            group = {
+                'key': type_key,
+                'naam': getattr(ruimte_type, 'naam', None) or 'Geen ruimtetype',
+                'kleur_hex': getattr(ruimte_type, 'kleur_hex', None) or '#64748B',
+                'ruimtes': [],
+            }
+            groups_by_key[type_key] = group
+            groups.append(group)
+        group['ruimtes'].append({
+            'ruimte': ruimte,
+            'vestiging': vestiging,
+            'opslaglocatie_count': opslaglocatie_count,
+        })
+
+    return sorted(groups, key=lambda group: group['naam'])
+
+
 @app.route('/assistent/kamers')
 def assistent_kamers():
     if not check_db(): return redirect(url_for('dashboard'))
     bedrijf_id = get_huidig_bedrijf_id()
     try:
-        ruimtes_query = db.session.query(Ruimte, Vestiging)\
+        ruimtes_query = db.session.query(Ruimte, Vestiging, Ruimte_Type)\
             .join(Vestiging, Ruimte.vestiging_id == Vestiging.vestiging_id)\
+            .outerjoin(Ruimte_Type, Ruimte.ruimte_type_id == Ruimte_Type.ruimte_type_id)\
             .filter(Vestiging.bedrijf_id == bedrijf_id)\
-            .order_by(Vestiging.naam, Ruimte.nummer, Ruimte.naam).all()
+            .order_by(Ruimte_Type.naam, Vestiging.naam, Ruimte.nummer, Ruimte.naam).all()
         ruimtes_data = []
-        for ruimte, vestiging in ruimtes_query:
-            count = db.session.query(Kast).filter_by(ruimte_id=ruimte.ruimte_id, bedrijf_id=bedrijf_id).count()
-            ruimtes_data.append((ruimte, vestiging, count))
-        return render_template('assistent_kamer_selectie.html', ruimtes=ruimtes_data)
+        for ruimte, vestiging, ruimte_type in ruimtes_query:
+            count = db.session.query(Kast).filter_by(
+                ruimte_id=ruimte.ruimte_id, bedrijf_id=bedrijf_id
+            ).count()
+            ruimtes_data.append((ruimte, vestiging, ruimte_type, count))
+        return render_template(
+            'assistent_kamer_selectie.html',
+            ruimte_type_groups=_group_rooms_by_type(ruimtes_data),
+        )
     except Exception as e:
         print(f"Error: {e}")
         flash('Mijn Ruimtes kon niet worden geladen.', 'danger')
@@ -3171,6 +3210,28 @@ def locatiekaart_annuleren(locatiekaart_versie_id):
         flash("Aanvraag niet gevonden of al verwerkt.", "warning")
     return redirect(url_for('assistent_print_queue'))
 
+
+@app.route('/assistent/print-queue/locatiekaart/annuleren-alles', methods=['POST'])
+def locatiekaart_annuleren_alles():
+    if not check_db():
+        return redirect(url_for('dashboard'))
+    bedrijf_id = get_huidig_bedrijf_id()
+    versions = _get_pending_locatiekaart_versions(bedrijf_id, newest_first=False)
+    if not versions:
+        flash("Geen openstaande Locatiekaartjes.", "info")
+        return redirect(url_for('assistent_print_queue'))
+
+    cancelled_count = sum(
+        mark_locatiekaart_version_cancelled(version) for version in versions
+    )
+    db.session.commit()
+    flash(
+        f"{cancelled_count} Locatiekaartjes verwijderd uit Printopdrachten.",
+        "info",
+    )
+    return redirect(url_for('assistent_print_queue'))
+
+
 @app.route('/artikelen-beheer', methods=['GET', 'POST'])
 def artikelen_beheer():
     if not check_db(): return redirect(url_for('dashboard'))
@@ -3536,10 +3597,9 @@ def beheer_infra():
                                 kast_id=nieuwe_kast.kast_id,
                                 lokaal_artikel_id=pos.lokaal_artikel_id,
                                 strategie=(
-                                    'TWO_BIN'
-                                    if _position_material_type(pos)
-                                    is Materiaaltype.KANBAN
-                                    else 'STANDARD'
+                                    _POSITION_STRATEGIES[
+                                        _position_material_type(pos)
+                                    ]
                                 ),
                                 materiaaltype=_position_material_type(pos).value,
                                 kanban_min_override=override_min,

@@ -1614,7 +1614,7 @@ def test_position_switch_to_standard_clears_all_kanban_values(app_module, monkey
     assert response.status_code == 302
     assert position.kanban_min_override is None
     assert position.kanban_refill_quantity_override is None
-    assert position.strategie == "STANDARD"
+    assert position.strategie == "VISUAL_REVIEW"
 
 
 def test_room_page_empty_storage_location_says_opslaglocatie_not_kast(app_module):
@@ -1951,6 +1951,48 @@ def test_assistent_kamers_shows_flash_when_loading_fails(app_module, monkeypatch
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert "Mijn Ruimtes kon niet worden geladen." in html
+
+
+def test_mijn_ruimtes_groups_cards_by_kamertype_with_its_configured_color(
+    app_module,
+):
+    behandeling = SimpleNamespace(
+        ruimte_type_id=8, naam="Behandeling", kleur_hex="#123456"
+    )
+    onderzoek = SimpleNamespace(
+        ruimte_type_id=9, naam="Onderzoek", kleur_hex="#654321"
+    )
+    noord = SimpleNamespace(naam="Vestiging Noord")
+    zuid = SimpleNamespace(naam="Vestiging Zuid")
+    room_a = SimpleNamespace(ruimte_id=1, nummer="2", naam="Kamer B")
+    room_b = SimpleNamespace(ruimte_id=2, nummer="1", naam="Kamer A")
+    room_c = SimpleNamespace(ruimte_id=3, nummer=None, naam="Spreekkamer")
+
+    groups = app_module._group_rooms_by_type(
+        [
+            (room_a, noord, behandeling, 2),
+            (room_b, zuid, behandeling, 1),
+            (room_c, noord, onderzoek, 3),
+        ]
+    )
+
+    assert [group["naam"] for group in groups] == ["Behandeling", "Onderzoek"]
+    assert groups[0]["kleur_hex"] == "#123456"
+    assert [room["ruimte"].naam for room in groups[0]["ruimtes"]] == [
+        "Kamer B",
+        "Kamer A",
+    ]
+
+    with app_module.app.test_request_context("/"):
+        html = app_module.render_template(
+            "assistent_kamer_selectie.html", ruimte_type_groups=groups
+        )
+
+    assert "Behandeling" in html
+    assert "Onderzoek" in html
+    assert "background-color: #123456" in html
+    assert "Vestiging Noord" in html
+    assert "Vestiging Zuid" in html
 
 
 def test_room_page_opens_requested_kast_via_open_kast_param(app_module, monkeypatch):
@@ -3015,6 +3057,11 @@ def test_print_queue_view_renders_both_kanban_and_locatiekaart_sections(
     # AC-vereiste 'doelprinter' kunnen tonen (spec-review fix, ticket #26).
     assert 'data-printer-label="Badgy 200-printer"' in html
     assert 'data-printer-label="A4-kleurenprinter"' in html
+    assert (
+        'action="/assistent/print-queue/locatiekaart/annuleren-alles"' in html
+    )
+    assert "Alles verwijderen" in html
+    assert "Alle 1 openstaande Locatiekaartjes uit Printopdrachten verwijderen?" in html
     # Ticket #29: rustige takenlijst — taakgegevens zichtbaar, technische
     # diagnose en identificatoren niet. (De inline preview-<script> mag QR-
     # en SKU-gerelateerde code bevatten — die specifieke woorden dus niet

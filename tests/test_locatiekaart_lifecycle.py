@@ -652,6 +652,59 @@ def test_locatiekaart_annuleren_marks_cancelled_and_flashes(app_module, monkeypa
     assert "Aanvraag geannuleerd." in _flash_messages(client)
 
 
+def test_locatiekaart_annuleren_alles_cancels_only_pending_versions_for_company(
+    app_module, monkeypatch
+):
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+
+    with app_module.app.app_context():
+        app_module.db.session.query(app_module.LocatiekaartVersie).delete()
+        app_module.db.session.commit()
+
+    pending_a = _create_pending_locatiekaart_version(
+        app_module, voorraad_positie_id=91, inhoud_hash="pending-a"
+    )
+    pending_b = _create_pending_locatiekaart_version(
+        app_module, voorraad_positie_id=92, inhoud_hash="pending-b"
+    )
+    already_printed = _create_pending_locatiekaart_version(
+        app_module,
+        voorraad_positie_id=93,
+        inhoud_hash="printed",
+        status=app_module.LocatiekaartStatus.PRINTED.value,
+    )
+    other_company = _create_pending_locatiekaart_version(
+        app_module,
+        bedrijf_id=2,
+        voorraad_positie_id=94,
+        inhoud_hash="other-company",
+    )
+
+    client = _csrf_client(app_module)
+    response = client.post(
+        "/assistent/print-queue/locatiekaart/annuleren-alles",
+        data={"_csrf_token": "test-csrf"},
+    )
+
+    assert response.status_code == 302
+    assert _locatiekaart_status(app_module, pending_a) == (
+        app_module.LocatiekaartStatus.CANCELLED.value
+    )
+    assert _locatiekaart_status(app_module, pending_b) == (
+        app_module.LocatiekaartStatus.CANCELLED.value
+    )
+    assert _locatiekaart_status(app_module, already_printed) == (
+        app_module.LocatiekaartStatus.PRINTED.value
+    )
+    assert _locatiekaart_status(app_module, other_company) == (
+        app_module.LocatiekaartStatus.PENDING_PRINT.value
+    )
+    assert "2 Locatiekaartjes verwijderd uit Printopdrachten." in _flash_messages(
+        client
+    )
+
+
 def test_locatiekaart_annuleren_not_found_or_already_processed_flashes_warning(
     app_module, monkeypatch
 ):

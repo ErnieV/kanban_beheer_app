@@ -88,7 +88,7 @@ CREATE TABLE Voorraad_Positie (
     kast_id INTEGER,
     lokaal_artikel_id INTEGER,
     materiaaltype TEXT,
-    strategie TEXT,
+    strategie TEXT CHECK (strategie IN ('TWO_BIN', 'VISUAL_REVIEW')),
     kanban_min_override INTEGER,
     kanban_refill_quantity_override INTEGER,
     locatie_foto_url TEXT,
@@ -207,3 +207,29 @@ def test_inline_min_edit_saves_without_navigation_and_persists_after_reload(
         '[data-field="kanban_min_override"]'
     )
     expect(min_input_after_reload).to_have_value("7")
+
+
+def test_inline_material_type_change_to_standard_uses_legacy_strategy_value(
+    live_app_server, page
+):
+    """Production's CHK_Strategie allows VISUAL_REVIEW, not STANDARD.
+
+    This exercises the same browser request that previously returned an HTML
+    500 page, which the UI surfaced as "Onverwacht antwoord van de server.".
+    """
+    page.goto(f"{live_app_server}/assistent/kamer/1")
+
+    row = page.locator('tr[data-position-id="1"]')
+    material_type = row.locator('[data-field="materiaaltype"]')
+    material_type.select_option("STANDAARD")
+
+    status = row.locator('[data-status-for="materiaaltype"]')
+    expect(status).to_have_text("Opgeslagen")
+    expect(row.locator('[data-field="kanban_min_override"]')).to_be_disabled()
+    expect(row.locator('[data-field="kanban_refill_quantity_override"]')).to_be_disabled()
+
+    page.reload()
+    row_after_reload = page.locator('tr[data-position-id="1"]')
+    expect(row_after_reload.locator('[data-field="materiaaltype"]')).to_have_value(
+        "STANDAARD"
+    )
