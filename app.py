@@ -2370,12 +2370,36 @@ def add_to_kast_from_room(kast_id):
         lokaal_artikel_id=artikel_id
     ).first()
     if not bestaat:
+        try:
+            materiaaltype = normalize_material_type(
+                request.form.get('materiaaltype')
+            )
+            standaard = _article_kanban_standard(artikel)
+            if materiaaltype is Materiaaltype.STANDAARD:
+                min_override, refill_override = None, None
+            else:
+                min_override, refill_override = _position_form_values(
+                    request.form,
+                    standaard,
+                )
+                effective_kanban_settings(
+                    materiaaltype,
+                    standaard,
+                    min_override,
+                    refill_override,
+                )
+        except KanbanSettingsError as exc:
+            flash(str(exc), 'danger')
+            return redirect(
+                url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id)
+            )
+
         nieuw = Voorraad_Positie(
             bedrijf_id=bedrijf_id, kast_id=kast_id, lokaal_artikel_id=artikel_id,
-            strategie='TWO_BIN',
-            materiaaltype=Materiaaltype.KANBAN.value,
-            kanban_min_override=None,
-            kanban_refill_quantity_override=None,
+            strategie=_POSITION_STRATEGIES[materiaaltype],
+            materiaaltype=materiaaltype.value,
+            kanban_min_override=min_override,
+            kanban_refill_quantity_override=refill_override,
         )
         db.session.add(nieuw)
         db.session.flush()

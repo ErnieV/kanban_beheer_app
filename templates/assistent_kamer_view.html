@@ -159,8 +159,8 @@
                     </table>
                 </div>
 
-                <form action="{{ url_for('add_to_kast_from_room', kast_id=kast.kast_id) }}" method="POST" class="row g-2 align-items-center">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <form action="{{ url_for('add_to_kast_from_room', kast_id=kast.kast_id) }}" method="POST" class="row g-2 align-items-center" data-add-position-form>
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <div class="col-auto">
                         <span class="form-text fw-bold">Artikel toevoegen:</span>
                     </div>
@@ -171,11 +171,37 @@
                         <select name="artikel_id" class="form-select form-select-sm" required data-artikel-select>
                             <option value="" selected disabled>Kies artikel...</option>
                             {% for art in alle_artikelen %}
-                                <option value="{{ art.lokaal_artikel_id }}">
+                                {% set standaard = article_kanban_standard(art) %}
+                                <option value="{{ art.lokaal_artikel_id }}" data-kanban-min="{{ standaard.min_level }}" data-kanban-refill="{{ standaard.refill_quantity }}">
                                     {{ art.eigen_naam }}
                                 </option>
                             {% endfor %}
                         </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="visually-hidden">Materiaaltype</label>
+                        <select name="materiaaltype" class="form-select form-select-sm" data-materiaaltype-select>
+                            <option value="KANBAN" selected>Kanban</option>
+                            <option value="STANDAARD">Standaard materiaal</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3" data-kanban-add-settings>
+                        <div class="small text-muted" data-article-standard>
+                            Artikelstandaard: kies eerst een artikel.
+                        </div>
+                        <details class="mt-1" data-local-settings>
+                            <summary class="small">Andere waarden voor deze opslaglocatie</summary>
+                            <div class="row g-1 mt-1">
+                                <div class="col-6">
+                                    <label class="visually-hidden">Afwijkende Min</label>
+                                    <input type="number" min="0" step="1" name="kanban_min_override" class="form-control form-control-sm" placeholder="Min" data-min-override>
+                                </div>
+                                <div class="col-6">
+                                    <label class="visually-hidden">Afwijkende Aanvulhoeveelheid</label>
+                                    <input type="number" min="1" step="1" name="kanban_refill_quantity_override" class="form-control form-control-sm" placeholder="Aanv." data-refill-override>
+                                </div>
+                            </div>
+                        </details>
                     </div>
                     <div class="col-auto">
                         <button type="submit" class="btn btn-sm btn-success" title="Artikel toevoegen aan deze opslaglocatie" aria-label="Artikel toevoegen aan deze opslaglocatie"><i class="bi bi-plus" aria-hidden="true"></i></button>
@@ -384,6 +410,47 @@
                 option.hidden = query.length > 0 && !option.textContent.toLowerCase().includes(query);
             });
         });
+    });
+
+    document.querySelectorAll('[data-add-position-form]').forEach((form) => {
+        const articleSelect = form.querySelector('[data-artikel-select]');
+        const materialTypeSelect = form.querySelector('[data-materiaaltype-select]');
+        const settings = form.querySelector('[data-kanban-add-settings]');
+        const standard = form.querySelector('[data-article-standard]');
+        const localSettings = form.querySelector('[data-local-settings]');
+        const minOverride = form.querySelector('[data-min-override]');
+        const refillOverride = form.querySelector('[data-refill-override]');
+
+        function updateAddPositionForm() {
+            const isKanban = materialTypeSelect.value === 'KANBAN';
+            const selected = articleSelect.options[articleSelect.selectedIndex];
+            settings.hidden = !isKanban;
+            minOverride.disabled = !isKanban;
+            refillOverride.disabled = !isKanban;
+
+            if (!isKanban) return;
+
+            if (!selected || !selected.value) {
+                standard.textContent = 'Artikelstandaard: kies eerst een artikel.';
+                return;
+            }
+
+            const min = selected.dataset.kanbanMin;
+            const refill = selected.dataset.kanbanRefill;
+            standard.textContent = `Artikelstandaard: Min ${min} · Aanv. ${refill}`;
+            minOverride.placeholder = `Min ${min}`;
+            refillOverride.placeholder = `Aanv. ${refill}`;
+        }
+
+        articleSelect.addEventListener('change', updateAddPositionForm);
+        materialTypeSelect.addEventListener('change', updateAddPositionForm);
+        localSettings.addEventListener('toggle', () => {
+            if (!localSettings.open) {
+                minOverride.value = '';
+                refillOverride.value = '';
+            }
+        });
+        updateAddPositionForm();
     });
 </script>
 {% endblock %}

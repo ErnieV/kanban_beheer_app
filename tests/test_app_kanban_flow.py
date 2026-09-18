@@ -1505,6 +1505,7 @@ def test_new_position_defaults_to_kanban_material(app_module, monkeypatch):
         data={
             "_csrf_token": "test-csrf",
             "artikel_id": "7",
+            "materiaaltype": "KANBAN",
         },
     )
 
@@ -1515,6 +1516,88 @@ def test_new_position_defaults_to_kanban_material(app_module, monkeypatch):
     assert created[0].kanban_refill_quantity_override is None
     assert getattr(created[0], "trigger_min", None) is None
     assert getattr(created[0], "target_max", None) is None
+
+
+def test_new_position_can_use_standard_material_or_local_kanban_values(
+    app_module, monkeypatch
+):
+    created = []
+
+    class FakePosition:
+        def __init__(self, **values):
+            self.__dict__.update(values)
+            self.voorraad_positie_id = len(created) + 12
+            created.append(self)
+
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9)
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        bedrijf_id=1,
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+
+    class EmptyQuery:
+        def filter_by(self, **values):
+            return self
+
+        def first(self):
+            return None
+
+    class FakeSession:
+        def query(self, model):
+            return EmptyQuery()
+
+        def add(self, item):
+            return None
+
+        def flush(self):
+            return None
+
+        def commit(self):
+            return None
+
+    def scoped_item(model, item_id, bedrijf_id):
+        return {4: kast, 7: article}.get(item_id)
+
+    monkeypatch.setattr(app_module, "Voorraad_Positie", FakePosition)
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(app_module, "get_scoped_item", scoped_item)
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    client = _csrf_client(app_module)
+    standard_response = client.post(
+        "/assistent/kast/4/toevoegen",
+        data={
+            "_csrf_token": "test-csrf",
+            "artikel_id": "7",
+            "materiaaltype": "STANDAARD",
+            "kanban_min_override": "99",
+            "kanban_refill_quantity_override": "99",
+        },
+    )
+    local_kanban_response = client.post(
+        "/assistent/kast/4/toevoegen",
+        data={
+            "_csrf_token": "test-csrf",
+            "artikel_id": "7",
+            "materiaaltype": "KANBAN",
+            "kanban_min_override": "5",
+            "kanban_refill_quantity_override": "6",
+        },
+    )
+
+    assert standard_response.status_code == 302
+    assert local_kanban_response.status_code == 302
+    assert created[0].materiaaltype == "STANDAARD"
+    assert created[0].strategie == "VISUAL_REVIEW"
+    assert created[0].kanban_min_override is None
+    assert created[0].kanban_refill_quantity_override is None
+    assert created[1].materiaaltype == "KANBAN"
+    assert created[1].strategie == "TWO_BIN"
+    assert created[1].kanban_min_override == 5
+    assert created[1].kanban_refill_quantity_override == 6
 
 
 def test_new_position_uses_the_current_article_standard_after_a_change(
