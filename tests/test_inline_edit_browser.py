@@ -109,6 +109,10 @@ INSERT INTO Lokaal_Artikel (
     lokaal_artikel_id, bedrijf_id, global_id, eigen_naam, foto_url,
     verpakkingseenheid_tekst, kanban_min, kanban_refill_quantity
 ) VALUES (1, 1, NULL, 'Verband', NULL, 'doos', 3, 4);
+INSERT INTO Lokaal_Artikel (
+    lokaal_artikel_id, bedrijf_id, global_id, eigen_naam, foto_url,
+    verpakkingseenheid_tekst, kanban_min, kanban_refill_quantity
+) VALUES (2, 1, NULL, 'Pleister', NULL, 'doos', 5, 6);
 INSERT INTO Voorraad_Positie (
     voorraad_positie_id, bedrijf_id, kast_id, lokaal_artikel_id,
     materiaaltype, strategie, kanban_min_override,
@@ -233,3 +237,24 @@ def test_inline_material_type_change_to_standard_uses_legacy_strategy_value(
     expect(row_after_reload.locator('[data-field="materiaaltype"]')).to_have_value(
         "STANDAARD"
     )
+
+
+def test_add_article_uses_the_article_kanban_standard(live_app_server, page):
+    """Adding an article exercises the real room form against the new schema."""
+    page.goto(f"{live_app_server}/assistent/kamer/1")
+
+    form = page.locator('[data-add-position-form]')
+    form.locator('[data-artikel-select]').select_option('2')
+    expect(form.locator('[data-article-standard]')).to_have_text(
+        'Artikelstandaard: Min 5 · Aanv. 6'
+    )
+
+    form.locator('button[type="submit"]').click()
+
+    row = page.locator('tr[data-position-id="2"]')
+    expect(row).to_be_visible()
+    expect(row.locator('[data-field="materiaaltype"]')).to_have_value('KANBAN')
+    expect(row.locator('[data-field="kanban_min_override"]')).to_have_value('5')
+    expect(
+        row.locator('[data-field="kanban_refill_quantity_override"]')
+    ).to_have_value('6')

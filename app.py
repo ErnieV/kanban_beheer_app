@@ -2305,8 +2305,25 @@ def update_voorraad_positie(voorraad_positie_id):
     except KanbanSettingsError as exc:
         flash(str(exc), 'danger')
         return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
+    except Exception as exc:
+        db.session.rollback()
+        _flash_safe_error(
+            f"update_voorraad_positie voorraad_positie_id={voorraad_positie_id}",
+            exc,
+            _SAFE_ERROR_MESSAGE_OPSLAAN,
+        )
+        return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        _flash_safe_error(
+            f"update_voorraad_positie voorraad_positie_id={voorraad_positie_id}",
+            exc,
+            _SAFE_ERROR_MESSAGE_OPSLAAN,
+        )
+        return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
     flash('Voorraadinstellingen bijgewerkt.', 'success')
     return redirect(url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id))
 
@@ -2349,8 +2366,29 @@ def api_update_voorraad_positie(voorraad_positie_id):
         display = _apply_voorraad_positie_kanban_update(positie, artikel, request.form)
     except KanbanSettingsError as exc:
         return jsonify({'ok': False, 'error': str(exc)}), 422
+    except Exception as exc:
+        db.session.rollback()
+        _log_technical_error(
+            f"api_update_voorraad_positie voorraad_positie_id={voorraad_positie_id}",
+            exc,
+        )
+        return jsonify({
+            'ok': False,
+            'error': _SAFE_ERROR_MESSAGE_OPSLAAN,
+        }), 503
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        _log_technical_error(
+            f"api_update_voorraad_positie voorraad_positie_id={voorraad_positie_id}",
+            exc,
+        )
+        return jsonify({
+            'ok': False,
+            'error': _SAFE_ERROR_MESSAGE_OPSLAAN,
+        }), 503
     return jsonify({'ok': True, **display})
 
 @app.route('/assistent/kast/<int:kast_id>/toevoegen', methods=['POST'])
@@ -2388,23 +2426,33 @@ def add_to_kast_from_room(kast_id):
                     min_override,
                     refill_override,
                 )
+
+            nieuw = Voorraad_Positie(
+                bedrijf_id=bedrijf_id, kast_id=kast_id, lokaal_artikel_id=artikel_id,
+                strategie=_POSITION_STRATEGIES[materiaaltype],
+                materiaaltype=materiaaltype.value,
+                kanban_min_override=min_override,
+                kanban_refill_quantity_override=refill_override,
+            )
+            db.session.add(nieuw)
+            db.session.flush()
+            nieuw.qr_code = f"{API_BASE_URL}/{nieuw.voorraad_positie_id}"
+            db.session.commit()
         except KanbanSettingsError as exc:
             flash(str(exc), 'danger')
             return redirect(
                 url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id)
             )
-
-        nieuw = Voorraad_Positie(
-            bedrijf_id=bedrijf_id, kast_id=kast_id, lokaal_artikel_id=artikel_id,
-            strategie=_POSITION_STRATEGIES[materiaaltype],
-            materiaaltype=materiaaltype.value,
-            kanban_min_override=min_override,
-            kanban_refill_quantity_override=refill_override,
-        )
-        db.session.add(nieuw)
-        db.session.flush()
-        nieuw.qr_code = f"{API_BASE_URL}/{nieuw.voorraad_positie_id}"
-        db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            _flash_safe_error(
+                f"add_to_kast_from_room kast_id={kast_id} artikel_id={artikel_id}",
+                exc,
+                _SAFE_ERROR_MESSAGE_TOEVOEGEN,
+            )
+            return redirect(
+                url_for('assistent_kamer_view', ruimte_id=kast.ruimte_id)
+            )
         flash('Artikel toegevoegd.', 'success')
     else:
         flash('Artikel zit al in deze opslaglocatie.', 'warning')
@@ -2933,6 +2981,13 @@ _SAFE_ERROR_MESSAGE_VERWIJDEREN = (
 )
 _SAFE_ERROR_MESSAGE_AANVRAGEN = (
     'Aanvragen is niet gelukt. Er is niets aangevraagd. Probeer het later '
+    'opnieuw, of vraag hulp.'
+)
+_SAFE_ERROR_MESSAGE_OPSLAAN = (
+    'Opslaan is niet gelukt. Probeer het later opnieuw, of vraag hulp.'
+)
+_SAFE_ERROR_MESSAGE_TOEVOEGEN = (
+    'Toevoegen is niet gelukt. Er is niets toegevoegd. Probeer het later '
     'opnieuw, of vraag hulp.'
 )
 
@@ -3646,8 +3701,21 @@ def beheer_infra():
                 return redirect(url_for('beheer_infra', vestiging_id=ruimte.vestiging_id, ruimte_id=ruimte_id))
         except IntegrityError as e:
             db.session.rollback()
-            if "CHK_Kast_Type" in str(e): flash("Fout: Ongeldig type opslag.", 'danger')
-            else: flash(f"Database fout: {e}", 'danger')
+            if "CHK_Kast_Type" in str(e):
+                flash("Fout: Ongeldig type opslag.", 'danger')
+            else:
+                _flash_safe_error(
+                    f"beheer_infra actie={actie}",
+                    e,
+                    _SAFE_ERROR_MESSAGE_AANMAKEN,
+                )
+        except Exception as exc:
+            db.session.rollback()
+            _flash_safe_error(
+                f"beheer_infra actie={actie}",
+                exc,
+                _SAFE_ERROR_MESSAGE_AANMAKEN,
+            )
         return redirect(url_for('beheer_infra', vestiging_id=active_vestiging_id, ruimte_id=active_ruimte_id))
 
     vestigingen = db.session.query(Vestiging).filter_by(bedrijf_id=bedrijf_id).all()

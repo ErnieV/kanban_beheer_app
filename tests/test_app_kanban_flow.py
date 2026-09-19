@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from kanban_domain import KanbanSettingsError, KanbanStandard
 
@@ -402,6 +403,67 @@ def test_api_position_update_without_db_returns_503_json_no_flash(
     assert body["ok"] is False
     with client.session_transaction() as session:
         assert session.get("_flashes", []) == []
+
+
+def test_api_position_update_write_failure_returns_safe_json(
+    app_module, monkeypatch, caplog
+):
+    """The inline room editor must not receive an HTML 500 on save failure."""
+    position = SimpleNamespace(
+        voorraad_positie_id=12,
+        bedrijf_id=1,
+        kast_id=4,
+        lokaal_artikel_id=7,
+    )
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9)
+    article = SimpleNamespace(lokaal_artikel_id=7, bedrijf_id=1)
+
+    class FakeSession:
+        def commit(self):
+            raise RuntimeError("simulated database connection loss")
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "database_is_available", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "get_scoped_item",
+        lambda _model, item_id, _bedrijf_id: {
+            12: position,
+            4: kast,
+            7: article,
+        }.get(item_id),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_apply_voorraad_positie_kanban_update",
+        lambda *_args: {
+            "materiaaltype": "KANBAN",
+            "min_level": 1,
+            "refill_quantity": 1,
+        },
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    with caplog.at_level("ERROR"):
+        response = _csrf_client(app_module).post(
+            "/api/voorraad-positie/12/update",
+            data={
+                "_csrf_token": "test-csrf",
+                "materiaaltype": "KANBAN",
+                "kanban_min_override": "1",
+                "kanban_refill_quantity_override": "1",
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "ok": False,
+        "error": "Opslaan is niet gelukt. Probeer het later opnieuw, of vraag hulp.",
+    }
+    assert "simulated database connection loss" in caplog.text
 
 
 def test_storage_location_rename_supersedes_location_card_versions(
@@ -1598,6 +1660,133 @@ def test_new_position_can_use_standard_material_or_local_kanban_values(
     assert created[1].strategie == "TWO_BIN"
     assert created[1].kanban_min_override == 5
     assert created[1].kanban_refill_quantity_override == 6
+
+
+def test_add_position_write_failure_redirects_with_a_safe_message(
+    app_module, monkeypatch, caplog
+):
+    """Adding an article must not turn a failed database write into HTTP 500."""
+    kast = SimpleNamespace(kast_id=4, bedrijf_id=1, ruimte_id=9)
+    article = SimpleNamespace(
+        lokaal_artikel_id=7,
+        bedrijf_id=1,
+        kanban_min=3,
+        kanban_refill_quantity=4,
+    )
+
+    class FakePosition:
+        def __init__(self, **values):
+            self.__dict__.update(values)
+            self.voorraad_positie_id = 12
+
+    class EmptyQuery:
+        def filter_by(self, **_values):
+            return self
+
+        def first(self):
+            return None
+
+    class FakeSession:
+        def query(self, _model):
+            return EmptyQuery()
+
+        def add(self, _item):
+            return None
+
+        def flush(self):
+            return None
+
+        def commit(self):
+            raise RuntimeError("simulated position constraint")
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setitem(app_module.app.config, "PROPAGATE_EXCEPTIONS", False)
+    monkeypatch.setattr(app_module, "Voorraad_Positie", FakePosition)
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "get_scoped_item",
+        lambda _model, item_id, _bedrijf_id: {4: kast, 7: article}.get(item_id),
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/assistent/kast/4/toevoegen",
+            data={
+                "_csrf_token": "test-csrf",
+                "artikel_id": "7",
+                "materiaaltype": "KANBAN",
+            },
+        )
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        flashes = [message for _, message in session.get("_flashes", [])]
+    assert flashes == [
+        "Toevoegen is niet gelukt. Er is niets toegevoegd. Probeer het later opnieuw, of vraag hulp."
+    ]
+    assert "simulated position constraint" in caplog.text
+
+
+def test_infrastructure_write_failure_hides_database_detail(
+    app_module, monkeypatch, caplog
+):
+    """A failed infrastructure write must never expose the SQL error."""
+    room = SimpleNamespace(ruimte_id=9, bedrijf_id=1, vestiging_id=1)
+
+    class FakeKast:
+        def __init__(self, **values):
+            self.__dict__.update(values)
+
+    class FakeSession:
+        def add(self, _item):
+            return None
+
+        def commit(self):
+            raise IntegrityError(
+                "INSERT",
+                {},
+                Exception("simulated storage constraint"),
+            )
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(app_module, "Kast", FakeKast)
+    monkeypatch.setattr(app_module, "check_db", lambda: True)
+    monkeypatch.setattr(app_module, "get_huidig_bedrijf_id", lambda: 1)
+    monkeypatch.setattr(
+        app_module,
+        "get_scoped_item",
+        lambda _model, item_id, _bedrijf_id: room if item_id == 9 else None,
+    )
+    monkeypatch.setattr(app_module, "db", SimpleNamespace(session=FakeSession()))
+
+    client = _csrf_client(app_module)
+    with caplog.at_level("ERROR"):
+        response = client.post(
+            "/beheer/infra",
+            data={
+                "_csrf_token": "test-csrf",
+                "actie": "nieuwe_kast",
+                "ruimte_id": "9",
+                "naam": "Testkast",
+                "type_opslag": "GRIJP",
+            },
+        )
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        flashes = [message for _, message in session.get("_flashes", [])]
+    assert flashes == [
+        "Aanmaken is niet gelukt. Er is niets opgeslagen. Probeer het later opnieuw, of vraag hulp."
+    ]
+    assert "simulated storage constraint" in caplog.text
 
 
 def test_new_position_uses_the_current_article_standard_after_a_change(
